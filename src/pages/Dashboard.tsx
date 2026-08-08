@@ -794,35 +794,31 @@ function sendTabMessage<T = any>(tabId: number, message: object): Promise<T> {
 
 /**
  * Content script hazır mı?
- * Önce PING; yoksa reload (manifest content_scripts yeniden yükler).
- * executeScript ile çift inject ETME — çift listener / boğuk tarama yaratır.
+ * ASLA tabs.reload yapma — tarama popup'ında sonsuz yenileme döngüsü yaratır.
+ * SW executeScript ile tarama yaptığı için content şart değil; sadece dene.
  */
 async function ensureContentScript(tabId: number): Promise<void> {
-  for (let attempt = 0; attempt < 4; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
       await sendTabMessage(tabId, { type: 'PING' });
       return;
     } catch {
-      if (attempt === 0) {
-        // Bir kez programmatic inject dene (guard çift init'i engeller)
-        try {
-          const files = chrome.runtime.getManifest().content_scripts?.[0]?.js;
-          if (files?.length) {
-            await chrome.scripting.executeScript({ target: { tabId }, files });
-            await wait(400);
-            await sendTabMessage(tabId, { type: 'PING' });
-            return;
-          }
-        } catch {
-          // fall through to reload
+      try {
+        const files = chrome.runtime.getManifest().content_scripts?.[0]?.js;
+        if (files?.length) {
+          await chrome.scripting.executeScript({ target: { tabId }, files });
+          await wait(500);
+          await sendTabMessage(tabId, { type: 'PING' });
+          return;
         }
+      } catch {
+        // ignore
       }
-      await chrome.tabs.reload(tabId);
-      await waitForTabComplete(tabId);
-      await wait(2000);
+      await wait(1000 * (attempt + 1));
     }
   }
-  throw new Error('Content script yüklenemedi. X sayfasını yenileyip tekrar dene.');
+  // Content yoksa da devam — SW scrape yeterli
+  console.warn('Content script PING yok; SW taramaya devam edecek');
 }
 
 async function openScanPopup(
@@ -847,37 +843,27 @@ async function openScanPopup(
 }
 
 async function startScanOnTab(tabId: number, scanId: string): Promise<void> {
-  let pageHint: 'following' | 'followers' | 'unknown' = 'unknown';
-  try {
-    const tab = await chrome.tabs.get(tabId);
-    const url = tab.url || '';
-    if (/\/following/i.test(url)) pageHint = 'following';
-    else if (/\/followers/i.test(url)) pageHint = 'followers';
-  } catch {
-    // ignore
-  }
-
-  // SW ana sürücü — content donmasa da executeScript ile scrape+scroll
+  // SADECE dashboard SW'yi başlatır (content tekrar begin atmasın — restart önler)
   try {
     await chrome.runtime.sendMessage({
       type: 'SCAN_SESSION_BEGIN',
-      payload: { tabId, scanId, pageHint },
+      payload: { tabId, scanId },
     });
   } catch (err) {
     console.warn('SCAN_SESSION_BEGIN failed', err);
+    throw new Error(
+      'Tarama sürücüsü başlatılamadı. Eklentiyi chrome://extensions üzerinden Reload et.'
+    );
   }
 
-  // Overlay + keep-alive port için content'e haber ver (zorunlu değil ama iyi)
+  // Overlay için content'e haber (begin GÖNDERMEZ)
   try {
-    const res = await sendTabMessage<{ status?: string; scanId?: string }>(tabId, {
+    await sendTabMessage(tabId, {
       type: 'SCAN_STARTED',
-      payload: { scanId },
+      payload: { scanId, swDriven: true },
     });
-    if (res?.status !== 'started' && res?.status !== 'success') {
-      console.warn('Content SCAN_STARTED ACK yok — SW yine de tarayacak');
-    }
   } catch (err) {
-    console.warn('Content SCAN_STARTED failed — SW yine de tarayacak', err);
+    console.warn('Content overlay start failed (OK)', err);
   }
 }
 

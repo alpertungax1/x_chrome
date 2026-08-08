@@ -222,11 +222,10 @@ function initContentScript() {
         (message.payload && (message.payload as { scanId?: string }).scanId) ||
         `scan_${Date.now()}`;
 
-      // Hemen ACK
       sendResponse({ status: 'started', scanId });
-      showScanOverlay('Tarama başlıyor (arka plan sürücüsü)…');
+      showScanOverlay('Tarama sürüyor…');
 
-      // SW keep-alive port — tarama SW'de yürür, CS sadece overlay + port
+      // Sadece keep-alive port — SCAN_SESSION_BEGIN GÖNDERME (dashboard zaten başlattı)
       let scanPort: chrome.runtime.Port | null = null;
       try {
         scanPort = chrome.runtime.connect({ name: 'scan-worker' });
@@ -234,18 +233,6 @@ function initContentScript() {
         scanPort = null;
       }
 
-      const pageHint = /\/following/i.test(location.pathname)
-        ? 'following'
-        : /\/followers/i.test(location.pathname)
-          ? 'followers'
-          : 'unknown';
-
-      safeSendMessage({
-        type: 'SCAN_SESSION_BEGIN',
-        payload: { scanId, pageHint },
-      });
-
-      // Storage'dan progress → overlay (SW yazıyor)
       const onStorage = (
         changes: { [key: string]: chrome.storage.StorageChange },
         area: string
@@ -280,9 +267,6 @@ function initContentScript() {
         }
       };
       chrome.storage.onChanged.addListener(onStorage);
-
-      // NOT: Ana tarama döngüsü Artık SW'de (executeScript).
-      // Content script arka planda donsa bile tarama devam eder.
 
       return false;
     }

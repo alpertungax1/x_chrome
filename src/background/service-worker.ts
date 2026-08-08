@@ -1,11 +1,10 @@
 /**
- * Tarama sürücüsü service worker'da.
- * Content script arka planda donasa bile executeScript ile scroll + scrape yapılır.
+ * Tarama sürücüsü — service worker.
+ * Stabilite öncelikli: çift session yok, tick kilidi, yavaş tempo, reload yok.
  */
 console.log('Background service worker initialized.');
 
 const dashboardPorts = new Set<chrome.runtime.Port>();
-const scanPorts = new Set<chrome.runtime.Port>();
 
 interface ScrapedUser {
   id: string;
@@ -28,25 +27,26 @@ interface ActiveScan {
   tick: number;
   expected: number | null;
   recovery: number;
-  pageHint: 'following' | 'followers' | 'unknown';
-  finishing: boolean;
   lastRecoveryAt: number;
+  consecutiveInjectFails: number;
+  finishing: boolean;
+  tickRunning: boolean;
 }
 
 let active: ActiveScan | null = null;
 let scanTickTimer: ReturnType<typeof setInterval> | null = null;
-let swKeepAliveTimer: ReturnType<typeof setInterval> | null = null;
+let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
 
 chrome.runtime.onConnect.addListener((port) => {
-  if (port.name === 'dashboard') {
-    dashboardPorts.add(port);
-    port.onDisconnect.addListener(() => dashboardPorts.delete(port));
-    return;
-  }
-  if (port.name === 'scan-worker') {
-    scanPorts.add(port);
-    if (active) ensureScanDriver();
-    port.onDisconnect.addListener(() => scanPorts.delete(port));
+  if (port.name === 'dashboard' || port.name === 'scan-worker') {
+    // Port SW'yi uyanık tutar
+    port.onDisconnect.addListener(() => {
+      // no-op
+    });
+    if (port.name === 'dashboard') {
+      dashboardPorts.add(port);
+      port.onDisconnect.addListener(() => dashboardPorts.delete(port));
+    }
   }
 });
 
@@ -60,31 +60,23 @@ function broadcastToDashboards(message: object) {
   }
 }
 
-function formatProgressText(payload: {
-  foundUsersCount?: number;
-  debug?: string;
-} | null): string {
-  if (!payload || payload.foundUsersCount == null) return '';
-  const debug = payload.debug ? ` | ${payload.debug}` : '';
-  return `Tarama sürüyor... Bulunan: ${payload.foundUsersCount}${debug}`;
-}
-
-async function pushLiveProgressToDashboards(
-  payload: { foundUsersCount?: number; debug?: string } | null,
+async function pushLiveProgress(
+  payload: { foundUsersCount?: number; debug?: string; scanId?: string } | null,
   mode: 'progress' | 'clear' = 'progress'
 ) {
-  const text = mode === 'clear' ? '' : formatProgressText(payload);
-  const count =
-    mode === 'clear' || payload?.foundUsersCount == null ? null : payload.foundUsersCount;
+  const text =
+    mode === 'clear' || !payload || payload.foundUsersCount == null
+      ? ''
+      : `Tarama sürüyor... Bulunan: ${payload.foundUsersCount}${
+          payload.debug ? ` | ${payload.debug}` : ''
+        }`;
 
   if (mode === 'clear') {
     void chrome.action.setBadgeText({ text: '' });
-  } else if (typeof count === 'number') {
-    void chrome.action.setBadgeText({ text: count > 999 ? '999+' : String(count) });
+  } else if (payload?.foundUsersCount != null) {
+    const n = payload.foundUsersCount;
+    void chrome.action.setBadgeText({ text: n > 999 ? '999+' : String(n) });
     void chrome.action.setBadgeBackgroundColor({ color: '#2563eb' });
-  }
-
-  if (mode === 'progress') {
     broadcastToDashboards({ type: 'SCAN_PROGRESS', payload });
   }
 
@@ -96,62 +88,60 @@ async function pushLiveProgressToDashboards(
     return;
   }
 
-  const dashTabs = tabs.filter(
-    (t) =>
-      !!t.id &&
-      !!t.url &&
-      t.url.startsWith(extPrefix) &&
-      (t.url.includes('index.html') || t.url.endsWith('/') || t.url.includes('src/'))
-  );
-
-  await Promise.all(
-    dashTabs.map(async (tab) => {
-      if (!tab.id) return;
-      try {
-        await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          world: 'MAIN',
-          func: (statusText: string, n: number | null) => {
-            const bar = document.getElementById('xrm-scan-live');
-            if (!bar) return;
-            if (!statusText) {
-              bar.style.display = 'none';
-              bar.textContent = '';
-              document.body.classList.remove('xrm-scanning');
-              if (document.title.startsWith('Tarama')) {
-                document.title = 'X Relationship Manager';
-              }
-            } else {
-              bar.style.display = 'block';
-              bar.textContent = statusText;
-              document.body.classList.add('xrm-scanning');
-              if (n != null) document.title = `Tarama (${n}) · X Manager`;
+  for (const tab of tabs) {
+    if (!tab.id || !tab.url?.startsWith(extPrefix)) continue;
+    if (!tab.url.includes('index.html') && !tab.url.endsWith('/')) continue;
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        world: 'MAIN',
+        func: (statusText: string, n: number | null) => {
+          const bar = document.getElementById('xrm-scan-live');
+          if (!bar) return;
+          if (!statusText) {
+            bar.style.display = 'none';
+            bar.textContent = '';
+            document.body.classList.remove('xrm-scanning');
+            if (document.title.startsWith('Tarama')) {
+              document.title = 'X Relationship Manager';
             }
-            window.dispatchEvent(
-              new CustomEvent('xrm-scan-progress', {
-                detail: { text: statusText, count: n },
-              })
-            );
-          },
-          args: [text, count],
-        });
-      } catch {
-        // ignore
-      }
-    })
-  );
+          } else {
+            bar.style.display = 'block';
+            bar.textContent = statusText;
+            document.body.classList.add('xrm-scanning');
+            if (n != null) document.title = `Tarama (${n}) · X Manager`;
+          }
+          window.dispatchEvent(
+            new CustomEvent('xrm-scan-progress', {
+              detail: { text: statusText, count: n },
+            })
+          );
+        },
+        args: [
+          text,
+          mode === 'clear' || payload?.foundUsersCount == null
+            ? null
+            : payload.foundUsersCount,
+        ],
+      });
+    } catch {
+      // ignore
+    }
+  }
 }
 
-/**
- * Sayfada bir tur: kullanıcıları scrape et + kaydır.
- * Self-contained — inject edilebilir, dış scope yok.
- */
+/** Tek inject: scrape + nazik scroll. Self-contained. */
 function scrapeAndScrollInPage(): {
-  users: ScrapedUser[];
+  users: Array<{
+    id: string;
+    username: string;
+    displayName: string;
+    isFollowing: boolean;
+    isFollower: boolean;
+    avatarUrl?: string;
+  }>;
   expected: number | null;
   cellCount: number;
-  scrollHeight: number;
-  href: string;
 } {
   const skip = new Set([
     'home', 'explore', 'search', 'notifications', 'messages', 'settings', 'i',
@@ -195,16 +185,25 @@ function scrapeAndScrollInPage(): {
       const m = text.match(re);
       if (!m) continue;
       const label = m[0].toLowerCase();
-      if (pageFollowing && label.includes('follower') && !label.includes('following')) continue;
-      if (pageFollowers && label.includes('following') && !label.includes('follower')) continue;
+      if (pageFollowing && label.includes('follower') && !label.includes('following'))
+        continue;
+      if (pageFollowers && label.includes('following') && !label.includes('follower'))
+        continue;
       const n = parseCount(m[1]);
       if (n != null && n >= 1 && n < 50_000_000) return n;
     }
     return null;
   }
 
-  const now = Date.now();
-  const found = new Map<string, ScrapedUser>();
+  const found: Array<{
+    id: string;
+    username: string;
+    displayName: string;
+    isFollowing: boolean;
+    isFollower: boolean;
+    avatarUrl?: string;
+  }> = [];
+  const seen = new Set<string>();
   const cells = document.querySelectorAll('[data-testid="UserCell"]');
 
   cells.forEach((cell) => {
@@ -220,10 +219,13 @@ function scrapeAndScrollInPage(): {
     }
     if (!username) return;
     const id = username.toLowerCase();
-    if (found.has(id)) return;
+    if (seen.has(id)) return;
+    seen.add(id);
 
     let displayName = username;
-    const nameSpan = cell.querySelector(`a[href="/${username}"] div[dir="auto"] span`);
+    const nameSpan = cell.querySelector(
+      `a[href="/${username}"] div[dir="auto"] span`
+    );
     if (nameSpan?.textContent) displayName = nameSpan.textContent.trim();
 
     const inner = (cell as HTMLElement).innerText || '';
@@ -231,35 +233,31 @@ function scrapeAndScrollInPage(): {
       pageFollowers ||
       inner.includes('Follows you') ||
       inner.includes('Seni takip ediyor');
-    const unfollowBtn = cell.querySelector('[data-testid$="-unfollow"]');
-    const isFollowing = pageFollowing || Boolean(unfollowBtn);
-
+    const isFollowing =
+      pageFollowing || Boolean(cell.querySelector('[data-testid$="-unfollow"]'));
     const avatarImg = cell.querySelector(
       'img[src*="profile_images"]'
     ) as HTMLImageElement | null;
 
-    found.set(id, {
+    found.push({
       id,
       username,
       displayName,
       isFollowing,
       isFollower,
       avatarUrl: avatarImg?.src,
-      firstSeenAt: now,
-      lastSeenAt: now,
     });
   });
 
-  // Scroll
-  const step = 1400;
+  // Nazik scroll — sayfayı çökertmeyecek kadar yavaş
+  const step = 900;
   if (cells.length > 0) {
     const last = cells[cells.length - 1] as HTMLElement;
-    last.scrollIntoView({ behavior: 'auto', block: 'end' });
-    for (let i = Math.max(0, cells.length - 8); i < cells.length; i++) {
-      (cells[i] as HTMLElement).scrollIntoView({ behavior: 'auto', block: 'nearest' });
+    try {
+      last.scrollIntoView({ behavior: 'auto', block: 'end' });
+    } catch {
+      // ignore
     }
-    last.scrollIntoView({ behavior: 'auto', block: 'end' });
-
     let el: HTMLElement | null = (cells[0] as HTMLElement).parentElement;
     while (el && el !== document.body) {
       if (el.scrollHeight > el.clientHeight + 40) {
@@ -273,88 +271,59 @@ function scrapeAndScrollInPage(): {
   const se = document.scrollingElement || document.documentElement;
   se.scrollTop += step;
   window.scrollBy(0, step);
-  se.dispatchEvent(new Event('scroll', { bubbles: true }));
-  window.dispatchEvent(
-    new WheelEvent('wheel', { deltaY: step, bubbles: true, cancelable: true })
-  );
-
-  // Retry butonu
-  const buttons = Array.from(document.querySelectorAll('div[role="button"], button'));
-  for (const btn of buttons) {
-    const t = (btn.textContent || '').trim().toLowerCase();
-    if (t === 'retry' || t === 'try again' || t === 'yeniden dene' || t === 'tekrar dene') {
-      (btn as HTMLElement).click();
-      break;
-    }
-  }
-
-  // Agresif recovery: ara sıra alta zıpla
-  if (Math.random() < 0.15) {
-    se.scrollTop = se.scrollHeight;
-  }
 
   return {
-    users: Array.from(found.values()),
+    users: found,
     expected: readExpected(),
     cellCount: cells.length,
-    scrollHeight: se.scrollHeight,
-    href: location.href,
   };
 }
 
-/** Takılınca daha agresif scroll */
-function aggressiveRecoverInPage() {
+function softRecoverInPage() {
   const se = document.scrollingElement || document.documentElement;
   const cells = document.querySelectorAll('[data-testid="UserCell"]');
   if (cells.length > 0) {
-    (cells[cells.length - 1] as HTMLElement).scrollIntoView({
-      behavior: 'auto',
-      block: 'end',
-    });
+    try {
+      (cells[cells.length - 1] as HTMLElement).scrollIntoView({
+        behavior: 'auto',
+        block: 'end',
+      });
+    } catch {
+      // ignore
+    }
   }
-  const mid = Math.max(0, se.scrollTop - se.clientHeight * 2);
-  se.scrollTop = mid;
-  window.scrollTo(0, mid);
-  // sonra alta
+  // hafif yukarı-aşağı
+  const cur = se.scrollTop;
+  se.scrollTop = Math.max(0, cur - 400);
   se.scrollTop = se.scrollHeight;
-  window.scrollTo(0, document.body.scrollHeight);
-  document.body.dispatchEvent(
-    new KeyboardEvent('keydown', { key: 'End', code: 'End', bubbles: true })
-  );
-  for (let i = 0; i < 5; i++) {
-    document.body.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'PageDown', code: 'PageDown', bubbles: true })
-    );
-  }
 }
 
 function ensureScanDriver() {
   if (scanTickTimer != null) return;
 
-  if (swKeepAliveTimer == null) {
-    swKeepAliveTimer = setInterval(() => {
+  if (keepAliveTimer == null) {
+    keepAliveTimer = setInterval(() => {
       void chrome.storage.local.get(['activeScanId']);
-    }, 15000);
+    }, 20000);
   }
 
-  // 700ms — arka planda da SW timer çalışır
+  // 1.5 sn — sayfayı boğmamak için
   scanTickTimer = setInterval(() => {
     void runScanTick();
-  }, 700);
+  }, 1500);
 
   void runScanTick();
 }
 
-function stopScanDriver(clearActive = true) {
+function stopScanDriver() {
   if (scanTickTimer != null) {
     clearInterval(scanTickTimer);
     scanTickTimer = null;
   }
-  if (swKeepAliveTimer != null) {
-    clearInterval(swKeepAliveTimer);
-    swKeepAliveTimer = null;
+  if (keepAliveTimer != null) {
+    clearInterval(keepAliveTimer);
+    keepAliveTimer = null;
   }
-  if (clearActive) active = null;
 }
 
 async function publishProgress(debug: string) {
@@ -365,19 +334,29 @@ async function publishProgress(debug: string) {
     debug,
     updatedAt: Date.now(),
   };
-  await chrome.storage.local.set({
-    scanProgress: payload,
-    scanStatus: 'running',
-    activeScanId: active.scanId,
-  });
-  await pushLiveProgressToDashboards(payload, 'progress');
+  try {
+    await chrome.storage.local.set({
+      scanProgress: payload,
+      scanStatus: 'running',
+      activeScanId: active.scanId,
+    });
+  } catch {
+    // quota vs.
+  }
+  await pushLiveProgress(payload, 'progress');
 }
 
 async function completeScan(status: 'completed' | 'cancelled' | 'error', error?: string) {
   if (!active || active.finishing) return;
   active.finishing = true;
+
   const scanId = active.scanId;
-  const users = Array.from(active.users.values());
+  const users = Array.from(active.users.values()).map((u) => ({
+    ...u,
+    firstSeenAt: u.firstSeenAt || Date.now(),
+    lastSeenAt: Date.now(),
+  }));
+
   const result = {
     status,
     scanId,
@@ -387,173 +366,201 @@ async function completeScan(status: 'completed' | 'cancelled' | 'error', error?:
     abortedByUser: status === 'cancelled',
   };
 
-  console.log(`Scan ${status}: ${users.length} users (scanId=${scanId})`);
+  console.log(`Scan ${status}: ${users.length} users`, scanId);
 
-  stopScanDriver(true);
+  stopScanDriver();
+  active = null;
 
-  await chrome.storage.local.set({
-    scanProgress: null,
-    scanStatus: status,
-    scanResult: result,
-    activeScanId: null,
-  });
+  try {
+    await chrome.storage.local.set({
+      scanProgress: null,
+      scanStatus: status,
+      scanResult: result,
+      activeScanId: null,
+    });
+  } catch (err) {
+    console.error('Failed to write scanResult', err);
+    // users çok büyükse küçültülmüş sonuç dene
+    try {
+      await chrome.storage.local.set({
+        scanProgress: null,
+        scanStatus: status,
+        scanResult: {
+          ...result,
+          users: users.slice(0, 5000),
+        },
+        activeScanId: null,
+      });
+    } catch (err2) {
+      console.error('Failed to write truncated scanResult', err2);
+    }
+  }
 
+  await pushLiveProgress(null, 'clear');
   if (status === 'completed') {
-    await pushLiveProgressToDashboards(null, 'clear');
     broadcastToDashboards({ type: 'SCAN_COMPLETED', payload: { users, scanId } });
-  } else if (status === 'error') {
-    void chrome.action.setBadgeText({ text: '!' });
-    await pushLiveProgressToDashboards(null, 'clear');
-  } else {
-    await pushLiveProgressToDashboards(null, 'clear');
   }
 }
 
 async function runScanTick() {
-  if (!active || active.finishing) return;
-  const { tabId } = active;
-  active.tick++;
-
-  let pageResult: {
-    users: ScrapedUser[];
-    expected: number | null;
-    cellCount: number;
-    scrollHeight: number;
-    href: string;
-  } | null = null;
+  if (!active || active.finishing || active.tickRunning) return;
+  active.tickRunning = true;
 
   try {
-    const injected = await chrome.scripting.executeScript({
-      target: { tabId },
-      world: 'MAIN',
-      func: scrapeAndScrollInPage,
-    });
-    pageResult = injected?.[0]?.result ?? null;
-  } catch (err) {
-    console.warn('Scan tick inject failed', err);
-    // sekme kapandıysa bitir
-    if (active.tick > 10 && active.users.size === 0) {
-      await completeScan('error', 'Tarama sekmesine erişilemedi (kapandı mı?)');
-    }
-    return;
-  }
+    const { tabId } = active;
+    active.tick++;
 
-  if (!pageResult || !active) return;
+    let pageResult: {
+      users: Array<{
+        id: string;
+        username: string;
+        displayName: string;
+        isFollowing: boolean;
+        isFollower: boolean;
+        avatarUrl?: string;
+      }>;
+      expected: number | null;
+      cellCount: number;
+    } | null = null;
 
-  // Kullanıcıları birleştir
-  let added = 0;
-  for (const u of pageResult.users) {
-    if (!active.users.has(u.id)) {
-      active.users.set(u.id, u);
-      added++;
-    } else {
-      const prev = active.users.get(u.id)!;
-      active.users.set(u.id, {
-        ...prev,
-        ...u,
-        isFollowing: prev.isFollowing || u.isFollowing,
-        isFollower: prev.isFollower || u.isFollower,
-      });
-    }
-  }
-
-  if (pageResult.expected != null) {
-    active.expected = pageResult.expected;
-  }
-
-  if (active.users.size > active.lastCount) {
-    active.lastCount = active.users.size;
-    active.lastGrowthAt = Date.now();
-    active.recovery = 0;
-  }
-
-  const expected = active.expected;
-  const ratio = expected && expected > 0 ? active.users.size / expected : null;
-  const noGrowthMs = Date.now() - active.lastGrowthAt;
-  const elapsedMin = Math.round((Date.now() - active.startedAt) / 60000);
-
-  const pct = ratio != null ? `${Math.round(ratio * 100)}%` : '?';
-  const debug = `SW#${active.tick} | +${added} | DOM:${pageResult.cellCount} | hedef:${expected ?? '?'} | ${pct} | durgun:${Math.round(noGrowthMs / 1000)}s | ${elapsedMin}dk`;
-
-  // Progress'i her 2 tick'te bir yaz (storage kotası)
-  if (added > 0 || active.tick % 2 === 0) {
-    await publishProgress(debug);
-  }
-
-  // Content overlay için mesaj (opsiyonel)
-  try {
-    await chrome.tabs.sendMessage(tabId, {
-      type: 'SCAN_OVERLAY',
-      payload: { text: `Bulunan: ${active.users.size} | ${debug}` },
-    });
-  } catch {
-    // donmuş olabilir — sorun değil
-  }
-
-  // —— Bitiş koşulları ——
-  // 1) Hedefin %98'i
-  if (expected && expected >= 20 && active.users.size >= expected * 0.98) {
-    // bir kaç tick daha
-    if (noGrowthMs > 8000) {
-      await completeScan('completed');
-      return;
-    }
-  }
-
-  // 2) Hard deadline 3 saat (7500+ için)
-  if (Date.now() - active.startedAt > 3 * 60 * 60 * 1000) {
-    await completeScan('completed');
-    return;
-  }
-
-  // 3) Durgunluk — hedefin altındaysak çok sabırlı
-  // ÖNEMLİ: recovery her tick artmamalı; en az 45 sn arayla
-  const belowTarget =
-    expected != null && expected > 50 && active.users.size < expected * 0.95;
-
-  const stagnantThreshold = belowTarget ? 90_000 : 50_000;
-  const sinceRecovery = Date.now() - active.lastRecoveryAt;
-
-  if (noGrowthMs > stagnantThreshold && sinceRecovery > 45_000) {
-    active.recovery++;
-    active.lastRecoveryAt = Date.now();
     try {
-      await chrome.scripting.executeScript({
+      const injected = await chrome.scripting.executeScript({
         target: { tabId },
         world: 'MAIN',
-        func: aggressiveRecoverInPage,
+        func: scrapeAndScrollInPage,
+      });
+      pageResult = injected?.[0]?.result ?? null;
+      active.consecutiveInjectFails = 0;
+    } catch (err) {
+      active.consecutiveInjectFails++;
+      console.warn('inject fail', active.consecutiveInjectFails, err);
+      // Reload YAPMA — döngüye sokar. Sadece bekle.
+      if (active.consecutiveInjectFails >= 80) {
+        await completeScan(
+          active.users.size > 0 ? 'completed' : 'error',
+          active.users.size > 0
+            ? undefined
+            : 'Tarama sekmesine uzun süre erişilemedi.'
+        );
+      }
+      return;
+    }
+
+    if (!pageResult || !active) return;
+
+    const now = Date.now();
+    let added = 0;
+    for (const u of pageResult.users) {
+      if (!u?.id) continue;
+      if (!active.users.has(u.id)) {
+        active.users.set(u.id, {
+          ...u,
+          firstSeenAt: now,
+          lastSeenAt: now,
+        });
+        added++;
+      } else {
+        const prev = active.users.get(u.id)!;
+        active.users.set(u.id, {
+          ...prev,
+          ...u,
+          isFollowing: prev.isFollowing || u.isFollowing,
+          isFollower: prev.isFollower || u.isFollower,
+          lastSeenAt: now,
+        });
+      }
+    }
+
+    if (pageResult.expected != null) active.expected = pageResult.expected;
+
+    if (active.users.size > active.lastCount) {
+      active.lastCount = active.users.size;
+      active.lastGrowthAt = now;
+      active.recovery = 0;
+    }
+
+    const expected = active.expected;
+    const noGrowthMs = now - active.lastGrowthAt;
+    const ratio =
+      expected && expected > 0 ? active.users.size / expected : null;
+    const pct = ratio != null ? `${Math.round(ratio * 100)}%` : '?';
+    const debug = `SW#${active.tick} | +${added} | DOM:${pageResult.cellCount} | hedef:${expected ?? '?'} | ${pct} | durgun:${Math.round(noGrowthMs / 1000)}s`;
+
+    if (added > 0 || active.tick % 2 === 0) {
+      await publishProgress(debug);
+    }
+
+    // Overlay (opsiyonel, hata yut)
+    try {
+      await chrome.tabs.sendMessage(tabId, {
+        type: 'SCAN_OVERLAY',
+        payload: { text: `Bulunan: ${active.users.size} | ${debug}` },
       });
     } catch {
       // ignore
     }
-    await publishProgress(
-      `Kurtarma #${active.recovery}… | ${active.users.size}/${expected ?? '?'}`
-    );
 
-    // rate-limit molası
-    if (active.recovery >= 2) {
-      const pause = Math.min(40000, 10000 + active.recovery * 4000);
-      await new Promise((r) => setTimeout(r, pause));
+    // Bitiş: hedefe yakın
+    if (expected && expected >= 20 && active.users.size >= expected * 0.97) {
+      if (noGrowthMs > 12_000) {
+        await completeScan('completed');
+        return;
+      }
     }
-  }
 
-  // Yeterince kurtarma + uzun durgunluk → bitir (kısmi sonuç kaydedilir)
-  const minRecoveries = belowTarget ? 12 : 8;
-  const minStagnant = belowTarget ? 5 * 60_000 : 3 * 60_000;
-  if (active.recovery >= minRecoveries && noGrowthMs > minStagnant) {
-    console.log(
-      `Scan stop stagnant: found=${active.users.size} expected=${expected} recovery=${active.recovery}`
-    );
-    await completeScan('completed');
+    // Hard deadline 3 saat
+    if (now - active.startedAt > 3 * 60 * 60 * 1000) {
+      await completeScan('completed');
+      return;
+    }
+
+    // Durgunluk + yumuşak kurtarma (seyrek)
+    const belowTarget =
+      expected != null && expected > 50 && active.users.size < expected * 0.95;
+    const stagnantFor = belowTarget ? 75_000 : 50_000;
+    const sinceRecovery = now - active.lastRecoveryAt;
+
+    if (noGrowthMs > stagnantFor && sinceRecovery > 60_000) {
+      active.recovery++;
+      active.lastRecoveryAt = now;
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          world: 'MAIN',
+          func: softRecoverInPage,
+        });
+      } catch {
+        // ignore
+      }
+      await publishProgress(
+        `Kurtarma #${active.recovery} | ${active.users.size}/${expected ?? '?'}`
+      );
+    }
+
+    // Çok uzun durgunluk → eldekiyle bitir
+    const minRec = belowTarget ? 10 : 6;
+    const minStag = belowTarget ? 6 * 60_000 : 4 * 60_000;
+    if (active.recovery >= minRec && noGrowthMs > minStag) {
+      await completeScan('completed');
+    }
+  } finally {
+    if (active) active.tickRunning = false;
   }
 }
 
-function beginScanSession(tabId: number, scanId: string, pageHint?: string) {
-  // Önceki taramayı temiz kapatma (yarım)
-  if (active && !active.finishing) {
-    console.warn('Replacing active scan session');
+function beginScanSession(tabId: number, scanId: string) {
+  // Aynı session tekrar gelirse SIFIRLAMA
+  if (active && !active.finishing && active.scanId === scanId && active.tabId === tabId) {
+    console.log('Scan session already active, ignore duplicate begin', scanId);
+    ensureScanDriver();
+    return;
   }
-  stopScanDriver(true);
+
+  // Farklı session: eskisini iptal etmeden yenisine geç (öncekini completed sayma)
+  if (active && !active.finishing) {
+    console.warn('Replacing scan session', active.scanId, '→', scanId);
+    stopScanDriver();
+  }
 
   active = {
     tabId,
@@ -565,25 +572,27 @@ function beginScanSession(tabId: number, scanId: string, pageHint?: string) {
     tick: 0,
     expected: null,
     recovery: 0,
-    pageHint:
-      pageHint === 'following' || pageHint === 'followers' ? pageHint : 'unknown',
-    finishing: false,
     lastRecoveryAt: 0,
+    consecutiveInjectFails: 0,
+    finishing: false,
+    tickRunning: false,
   };
 
   ensureScanDriver();
-  console.log('SW scan session begin', { tabId, scanId, pageHint });
-  void publishProgress('SW tarama sürücüsü başladı…');
+  console.log('Scan session begin', { tabId, scanId });
+  void publishProgress('SW tarama başladı…');
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'SCAN_SESSION_BEGIN') {
-    const tabId = sender.tab?.id ?? message.payload?.tabId;
+    const tabId = message.payload?.tabId ?? sender.tab?.id;
     const scanId = message.payload?.scanId || `scan_${Date.now()}`;
     if (typeof tabId === 'number') {
-      beginScanSession(tabId, scanId, message.payload?.pageHint);
+      beginScanSession(tabId, scanId);
+      sendResponse({ ok: true });
+    } else {
+      sendResponse({ ok: false, error: 'no tabId' });
     }
-    sendResponse({ ok: true });
     return false;
   }
 
@@ -591,62 +600,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (active && !active.finishing) {
       void completeScan('cancelled');
     } else {
-      stopScanDriver(true);
+      stopScanDriver();
+      active = null;
     }
     sendResponse({ ok: true });
     return false;
   }
 
-  // Content script hâlâ progress gönderebilir (yedek)
   if (message?.type === 'SCAN_PROGRESS' && message.payload) {
-    // SW biriktiricisine de ekle
-    if (active && Array.isArray(message.payload.users)) {
-      // ignore bulk
-    }
-    void pushLiveProgressToDashboards(message.payload, 'progress');
+    // Content yedek progress — SW zaten yazıyorsa üzerine yazma şart değil
+    void pushLiveProgress(message.payload, 'progress');
     return false;
   }
 
-  // Content'in kendi complete'i — SW zaten yönetiyorsa yoksay / birleştir
+  // Content'in complete'ini yok say — SW yönetir (çift complete / restart önler)
   if (message?.type === 'SCAN_COMPLETED') {
-    if (active && !active.finishing) {
-      // Content erken bittiyse kullanıcıları birleştir, SW devam etsin (hedef altındaysa)
-      const users = message.payload?.users || [];
-      for (const u of users) {
-        const id = (u.id || u.username || '').toLowerCase();
-        if (!id) continue;
-        if (!active.users.has(id)) {
-          active.users.set(id, {
-            id,
-            username: u.username || id,
-            displayName: u.displayName || u.username || id,
-            isFollowing: Boolean(u.isFollowing),
-            isFollower: Boolean(u.isFollower),
-            firstSeenAt: u.firstSeenAt || Date.now(),
-            lastSeenAt: Date.now(),
-            avatarUrl: u.avatarUrl,
-          });
-        }
-      }
-      if (active.users.size > active.lastCount) {
-        active.lastCount = active.users.size;
-        active.lastGrowthAt = Date.now();
-      }
-      // SW bitişine bırak — content complete scanResult yazmasın diye storage'a dokunma
-      sendResponse({ ok: true, takenOver: true });
-      return false;
-    }
-    void pushLiveProgressToDashboards(null, 'clear');
-    broadcastToDashboards({ type: 'SCAN_COMPLETED', payload: message.payload });
-    sendResponse({ ok: true });
+    sendResponse({ ok: true, ignored: true });
     return false;
-  }
-
-  if (message?.type === 'SCAN_ERROR') {
-    if (!active) {
-      void chrome.action.setBadgeText({ text: '!' });
-      void pushLiveProgressToDashboards(null, 'clear');
-    }
   }
 
   return false;
@@ -654,7 +624,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
-  // Dashboard abort: scanResult cancelled abortedByUser
   if (changes.scanResult?.newValue?.abortedByUser && active && !active.finishing) {
     void completeScan('cancelled');
   }
