@@ -21,11 +21,13 @@ const Dashboard: React.FC = () => {
   const [currentView, setCurrentView] = useState<ViewMode>('dashboard');
   const scanningWindowIdRef = React.useRef<number | null>(null);
   const scanningTabIdRef = React.useRef<number | null>(null);
+  const dashboardWindowIdRef = React.useRef<number | null>(null);
   // Sadece kullanıcı "Scan Now" bastığında true — açılışta asla tarama UI'sı yok
   const scanSessionActiveRef = React.useRef(false);
   const scanAbortRef = React.useRef(false);
   const activeScanIdRef = React.useRef<string | null>(null);
   const lastSeenUsersUpdatedAtRef = React.useRef<number | null>(null);
+  const lastProgressTextRef = React.useRef('');
 
   // Aksiyon state'leri
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
@@ -43,7 +45,23 @@ const Dashboard: React.FC = () => {
       return;
     }
     const debug = payload.debug ? ` | ${payload.debug}` : '';
-    setScanStatus(`Bulunan: ${payload.foundUsersCount}${debug}`);
+    const text = `Bulunan: ${payload.foundUsersCount}${debug}`;
+    if (text === lastProgressTextRef.current) return;
+    lastProgressTextRef.current = text;
+    setScanStatus(text);
+    // Sekme başlığı da güncellenir — arka planda bile fark edilir
+    document.title = `Tarama (${payload.foundUsersCount}) · X Manager`;
+  }, []);
+
+  /** Dashboard penceresini öne al — arka planda donmasın, progress canlı kalsın. */
+  const focusDashboardWindow = useCallback(async () => {
+    const id = dashboardWindowIdRef.current;
+    if (id == null) return;
+    try {
+      await chrome.windows.update(id, { focused: true, drawAttention: false });
+    } catch {
+      // ignore
+    }
   }, []);
 
   const closeScanningWindow = useCallback(() => {
@@ -54,6 +72,11 @@ const Dashboard: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    // Bu dashboard penceresinin id'sini sakla (tarama popup'ı odağı alınca geri döneceğiz)
+    void chrome.windows.getCurrent().then((win) => {
+      if (win.id != null) dashboardWindowIdRef.current = win.id;
+    });
+
     // Açılış: sadece DB yükle. Eski scanProgress/scanResult KALINTISINI temizle —
     // aksi halde "tarama sürüyor" görünür ve eski sonuçla anında "bitti" sanılır.
     void (async () => {
@@ -85,23 +108,75 @@ const Dashboard: React.FC = () => {
       }
     };
 
+    // Uzun ömürlü port: SW progress'i doğrudan basar (runtime.sendMessage kaçsa bile)
+    let port: chrome.runtime.Port | null = null;
+    const connectPort = () => {
+      try {
+        port = chrome.runtime.connect({ name: 'dashboard' });
+        port.onMessage.addListener((message: any) => {
+          if (!scanSessionActiveRef.current) return;
+          if (message?.type === 'SCAN_PROGRESS') {
+            applyScanProgress(message.payload);
+          }
+        });
+        port.onDisconnect.addListener(() => {
+          port = null;
+          // SW uyku/uyanma sonrası yeniden bağlan
+          if (scanSessionActiveRef.current) {
+            window.setTimeout(connectPort, 300);
+          }
+        });
+      } catch {
+        port = null;
+      }
+    };
+    connectPort();
+
+    // Sekme uyanınca storage'dan son progress'i çek (freeze sonrası)
+    const flushProgressFromStorage = () => {
+      if (!scanSessionActiveRef.current) return;
+      void chrome.storage.local.get(['scanProgress']).then((data) => {
+        if (data.scanProgress) applyScanProgress(data.scanProgress);
+      });
+      if (!port) connectPort();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') flushProgressFromStorage();
+    };
+    const onFocus = () => flushProgressFromStorage();
+
     chrome.runtime.onMessage.addListener(messageListener);
     chrome.storage.onChanged.addListener(storageListener);
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('focus', onFocus);
 
     return () => {
       chrome.runtime.onMessage.removeListener(messageListener);
       chrome.storage.onChanged.removeListener(storageListener);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('focus', onFocus);
+      try {
+        port?.disconnect();
+      } catch {
+        // ignore
+      }
     };
   }, [loadUsers, applyScanProgress]);
 
-  // Tarama aktifken progress'i storage'dan poll et (sekme donmasına karşı)
+  // Tarama aktifken progress'i storage'dan sık poll et
+  // (dashboard odaktayken canlı; arka planda da throttle'a rağmen toparlar)
   useEffect(() => {
-    if (!isScanning) return;
+    if (!isScanning) {
+      if (document.title.startsWith('Tarama')) {
+        document.title = 'X Relationship Manager';
+      }
+      return;
+    }
     const id = window.setInterval(async () => {
       if (!scanSessionActiveRef.current) return;
       const data = await chrome.storage.local.get(['scanProgress']);
       if (data.scanProgress) applyScanProgress(data.scanProgress);
-    }, 1000);
+    }, 500);
     return () => window.clearInterval(id);
   }, [isScanning, applyScanProgress]);
 
@@ -178,11 +253,22 @@ const Dashboard: React.FC = () => {
         );
       }
 
+      // Dashboard pencere id'sini taze al
+      try {
+        const cur = await chrome.windows.getCurrent();
+        if (cur.id != null) dashboardWindowIdRef.current = cur.id;
+      } catch {
+        // ignore
+      }
+
       setScanStatus(`Popup açılıyor (@${username})...`);
       const followingUrl = `https://x.com/${username}/following`;
-      const { windowId, tabId } = await openScanPopup(followingUrl);
+      // focused:false → dashboard odağı kaçmasın, UI donmasın
+      // (sayfa yüklemesi yine olur; tarama arka planda devam eder)
+      const { windowId, tabId } = await openScanPopup(followingUrl, false);
       scanningWindowIdRef.current = windowId;
       scanningTabIdRef.current = tabId;
+      await focusDashboardWindow();
       throwIfAborted();
 
       setScanStatus('Following sayfası yükleniyor...');
@@ -192,13 +278,16 @@ const Dashboard: React.FC = () => {
       throwIfAborted();
       await ensureContentScript(tabId);
       throwIfAborted();
+      await focusDashboardWindow();
 
       // --- Following ---
       setScanStatus('Takip edilenler taranıyor...');
+      lastProgressTextRef.current = '';
       const followingScanId = `following_${Date.now()}`;
       activeScanIdRef.current = followingScanId;
       await chrome.storage.local.remove(['scanResult', 'scanProgress', 'scanStatus']);
       await startScanOnTab(tabId, followingScanId);
+      await focusDashboardWindow();
       const followingResult = await waitForScanResult(
         followingScanId,
         15 * 60 * 1000,
@@ -218,6 +307,7 @@ const Dashboard: React.FC = () => {
 
       // --- Followers ---
       setScanStatus('Takipçiler taranıyor...');
+      lastProgressTextRef.current = '';
       const followersUrl = `https://x.com/${username}/followers`;
       await chrome.tabs.update(tabId, { url: followersUrl });
       throwIfAborted();
@@ -227,11 +317,13 @@ const Dashboard: React.FC = () => {
       throwIfAborted();
       await ensureContentScript(tabId);
       throwIfAborted();
+      await focusDashboardWindow();
 
       const followersScanId = `followers_${Date.now()}`;
       activeScanIdRef.current = followersScanId;
       await chrome.storage.local.remove(['scanResult', 'scanProgress', 'scanStatus']);
       await startScanOnTab(tabId, followersScanId);
+      await focusDashboardWindow();
       const followersResult = await waitForScanResult(
         followersScanId,
         15 * 60 * 1000,
@@ -661,13 +753,17 @@ async function ensureContentScript(tabId: number): Promise<void> {
   throw new Error('Content script yüklenemedi. X sayfasını yenileyip tekrar dene.');
 }
 
-async function openScanPopup(url: string): Promise<{ windowId: number; tabId: number }> {
+async function openScanPopup(
+  url: string,
+  focused = false
+): Promise<{ windowId: number; tabId: number }> {
   const win = await chrome.windows.create({
     url,
     type: 'popup',
     width: 1100,
     height: 900,
-    focused: true,
+    // false: dashboard odağı kaybetmez → progress canlı kalır
+    focused,
   });
 
   const windowId = win.id;

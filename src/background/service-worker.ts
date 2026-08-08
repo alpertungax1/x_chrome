@@ -2,13 +2,48 @@ import { userRepository } from '../db/users.repository';
 
 console.log('Background service worker initialized.');
 
+// Dashboard port'ları — progress canlı iletilir (sekme odakta olmasa bile SW uyanık kalır)
+const dashboardPorts = new Set<chrome.runtime.Port>();
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== 'dashboard') return;
+  dashboardPorts.add(port);
+  port.onDisconnect.addListener(() => {
+    dashboardPorts.delete(port);
+  });
+});
+
+function broadcastToDashboards(message: object) {
+  for (const port of dashboardPorts) {
+    try {
+      port.postMessage(message);
+    } catch {
+      dashboardPorts.delete(port);
+    }
+  }
+}
+
 /**
  * Content script tarama sonucunu hem runtime mesaj hem storage ile bildirir.
  * Dashboard donmuş/kapalı olsa bile sonuç IndexedDB'ye yazılsın.
  */
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  // Progress: storage zaten yazıldı; port dinleyen dashboard'lara da bas
+  if (message?.type === 'SCAN_PROGRESS') {
+    broadcastToDashboards({ type: 'SCAN_PROGRESS', payload: message.payload });
+    // Badge ile de göster (sekme başlığına bakmadan)
+    const n = message.payload?.foundUsersCount;
+    if (typeof n === 'number') {
+      void chrome.action.setBadgeText({ text: n > 999 ? '999+' : String(n) });
+      void chrome.action.setBadgeBackgroundColor({ color: '#2563eb' });
+    }
+    return false;
+  }
+
   if (message?.type === 'SCAN_COMPLETED' && message.payload?.users) {
     const users = message.payload.users;
+    void chrome.action.setBadgeText({ text: '' });
+    broadcastToDashboards({ type: 'SCAN_COMPLETED', payload: message.payload });
     userRepository
       .saveBatch(users)
       .then(() => {
@@ -29,6 +64,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message?.type === 'SCAN_ERROR') {
     console.warn('Service worker: scan error', message.payload?.error);
+    void chrome.action.setBadgeText({ text: '!' });
+    broadcastToDashboards({ type: 'SCAN_ERROR', payload: message.payload });
   }
 
   return false;
