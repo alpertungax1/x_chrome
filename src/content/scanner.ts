@@ -27,6 +27,39 @@ export class XScanner {
   private collectedUsers = new Map<string, Partial<XUser>>();
   private _stopRequested = false;
   private scrollRoot: HTMLElement | null = null;
+  private onProgressCb: ((progress: ScanProgress) => void) | null = null;
+  private expectedCount: number | null = null;
+  private lastGrowthAt = Date.now();
+  private tickBusy = false;
+
+  /**
+   * Service worker arka planda her ~1 sn bir çağırır.
+   * Sekme throttle olsa bile harici mesaj + SW scroll ile tarama ilerler.
+   */
+  public backgroundTick(): void {
+    if (!this.isScanning || this._stopRequested || this.tickBusy) return;
+    this.tickBusy = true;
+    try {
+      if (!this.scrollRoot?.isConnected) {
+        this.scrollRoot = this.findScrollRoot();
+      }
+      const before = this.collectedUsers.size;
+      this.collectFromDom();
+      this.performScroll();
+      this.collectFromDom();
+      if (this.collectedUsers.size > before) {
+        this.lastGrowthAt = Date.now();
+      }
+      this.onProgressCb?.({
+        count: this.collectedUsers.size,
+        debug: `bg-tick | hedef:${this.expectedCount ?? '?'} | DOM:${document.querySelectorAll('[data-testid="UserCell"]').length}`,
+      });
+    } catch (err) {
+      logger.warn('Scanner', 'backgroundTick error', err);
+    } finally {
+      this.tickBusy = false;
+    }
+  }
 
   public async startScan(onProgress: (progress: ScanProgress) => void): Promise<{
     users: Partial<XUser>[];
@@ -42,6 +75,8 @@ export class XScanner {
     this._stopRequested = false;
     this.collectedUsers.clear();
     this.scrollRoot = null;
+    this.onProgressCb = onProgress;
+    this.lastGrowthAt = Date.now();
     logger.log('Scanner', '=== SCAN STARTED ===', location.href);
 
     const ready = await this.waitForUserCells(25000);
@@ -49,12 +84,13 @@ export class XScanner {
 
     this.scrollRoot = this.findScrollRoot();
     const expected = this.readExpectedCount();
+    this.expectedCount = expected;
     logger.log('Scanner', 'Expected count from page', expected);
 
     onProgress({
       count: 0,
       debug: ready
-        ? `Liste hazır | hedef≈${expected ?? '?'} | ${this.describeRoot(this.scrollRoot)}`
+        ? `Liste hazır | hedef≈${expected ?? '?'} | ${this.describeRoot(this.scrollRoot)} | arka-plan tick açık`
         : 'UserCell yok',
     });
 
@@ -89,7 +125,15 @@ export class XScanner {
       if (newCount > 0 || this.collectedUsers.size > lastCount) {
         lastCount = this.collectedUsers.size;
         lastGrowthAt = Date.now();
+        this.lastGrowthAt = lastGrowthAt;
         fullRecoveryCycles = 0;
+      } else {
+        // SW tick büyüttüyse senkronize et
+        if (this.collectedUsers.size > lastCount) {
+          lastCount = this.collectedUsers.size;
+          lastGrowthAt = this.lastGrowthAt;
+          fullRecoveryCycles = 0;
+        }
       }
 
       const root = this.scrollRoot!;
@@ -199,6 +243,7 @@ export class XScanner {
   ): { users: Partial<XUser>[]; stopped: boolean } {
     this._stopRequested = false;
     this.isScanning = false;
+    this.onProgressCb = null;
     onProgress({
       count: this.collectedUsers.size,
       debug: stopped

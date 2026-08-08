@@ -847,6 +847,16 @@ async function openScanPopup(
 }
 
 async function startScanOnTab(tabId: number, scanId: string): Promise<void> {
+  // SW arka plan sürücüsü (başka sekmelerde gezerken scroll/tick)
+  try {
+    await chrome.runtime.sendMessage({
+      type: 'SCAN_SESSION_BEGIN',
+      payload: { tabId, scanId },
+    });
+  } catch {
+    // ignore
+  }
+
   const res = await sendTabMessage<{ status?: string; scanId?: string }>(tabId, {
     type: 'SCAN_STARTED',
     payload: { scanId },

@@ -197,7 +197,15 @@ function initContentScript() {
     if (message.type === 'SCAN_STOP') {
       scanner.stopScan();
       showScanOverlay('Tarama durduruluyor...');
+      safeSendMessage({ type: 'SCAN_SESSION_END' });
       sendResponse({ status: 'stopping' });
+      return false;
+    }
+
+    // SW arka plan sürücüsü — başka sekmelerde gezerken tarama dursun diye
+    if (message.type === 'SCAN_TICK') {
+      scanner.backgroundTick();
+      sendResponse({ ok: true, running: scanner.isRunning() });
       return false;
     }
 
@@ -210,27 +218,40 @@ function initContentScript() {
       sendResponse({ status: 'started', scanId });
       showScanOverlay('Tarama başlıyor...');
 
-      void scanner
-        .startScan((progress) => {
-          const payload = {
-            scanId,
-            foundUsersCount: progress.count,
-            lastUsername: progress.lastUsername,
-            debug: progress.debug,
-            updatedAt: Date.now(),
-            pageUrl: location.href,
-          };
-          const debug = progress.debug ? ` | ${progress.debug}` : '';
-          showScanOverlay(`Bulunan: ${progress.count}${debug}`);
+      // SW'yi uyanık tut + arka plan tick başlat
+      let scanPort: chrome.runtime.Port | null = null;
+      try {
+        scanPort = chrome.runtime.connect({ name: 'scan-worker' });
+      } catch {
+        scanPort = null;
+      }
+      safeSendMessage({ type: 'SCAN_SESSION_BEGIN', payload: { scanId } });
 
-          // storage + mesaj: SW dashboard DOM'unu (donmuş olsa bile) günceller
-          chrome.storage.local.set({
-            scanProgress: payload,
-            scanStatus: 'running',
-            activeScanId: scanId,
-          });
-          safeSendMessage({ type: 'SCAN_PROGRESS', payload });
-        })
+      const reportProgress = (progress: {
+        count: number;
+        lastUsername?: string;
+        debug?: string;
+      }) => {
+        const payload = {
+          scanId,
+          foundUsersCount: progress.count,
+          lastUsername: progress.lastUsername,
+          debug: progress.debug,
+          updatedAt: Date.now(),
+          pageUrl: location.href,
+        };
+        const debug = progress.debug ? ` | ${progress.debug}` : '';
+        showScanOverlay(`Bulunan: ${progress.count}${debug}`);
+        chrome.storage.local.set({
+          scanProgress: payload,
+          scanStatus: 'running',
+          activeScanId: scanId,
+        });
+        safeSendMessage({ type: 'SCAN_PROGRESS', payload });
+      };
+
+      void scanner
+        .startScan(reportProgress)
         .then(({ users, stopped }) => {
           const result = {
             status: (stopped ? 'cancelled' : 'completed') as 'cancelled' | 'completed',
@@ -252,6 +273,12 @@ function initContentScript() {
             scanResult: result,
             activeScanId: null,
           });
+          safeSendMessage({ type: 'SCAN_SESSION_END' });
+          try {
+            scanPort?.disconnect();
+          } catch {
+            // ignore
+          }
           if (!stopped) {
             safeSendMessage({ type: 'SCAN_COMPLETED', payload: { users, scanId } });
           }
@@ -271,6 +298,12 @@ function initContentScript() {
             scanResult: result,
             activeScanId: null,
           });
+          safeSendMessage({ type: 'SCAN_SESSION_END' });
+          try {
+            scanPort?.disconnect();
+          } catch {
+            // ignore
+          }
           safeSendMessage({ type: 'SCAN_ERROR', payload: { error: result.error, scanId } });
         });
 

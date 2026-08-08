@@ -2,13 +2,31 @@ console.log('Background service worker initialized.');
 
 // Dashboard port'ları
 const dashboardPorts = new Set<chrome.runtime.Port>();
+// Tarama keep-alive port'ları (content script açık tutar → SW uyumaz)
+const scanPorts = new Set<chrome.runtime.Port>();
+
+let activeScanTabId: number | null = null;
+let scanTickTimer: ReturnType<typeof setInterval> | null = null;
+let swKeepAliveTimer: ReturnType<typeof setInterval> | null = null;
 
 chrome.runtime.onConnect.addListener((port) => {
-  if (port.name !== 'dashboard') return;
-  dashboardPorts.add(port);
-  port.onDisconnect.addListener(() => {
-    dashboardPorts.delete(port);
-  });
+  if (port.name === 'dashboard') {
+    dashboardPorts.add(port);
+    port.onDisconnect.addListener(() => {
+      dashboardPorts.delete(port);
+    });
+    return;
+  }
+
+  if (port.name === 'scan-worker') {
+    scanPorts.add(port);
+    if (activeScanTabId != null) {
+      ensureScanDriver();
+    }
+    port.onDisconnect.addListener(() => {
+      scanPorts.delete(port);
+    });
+  }
 });
 
 function broadcastToDashboards(message: object) {
@@ -30,10 +48,7 @@ function formatProgressText(payload: {
   return `Tarama sürüyor... Bulunan: ${payload.foundUsersCount}${debug}`;
 }
 
-/**
- * Donmuş dashboard sekmesinde bile DOM güncelle.
- * React JS dursa bile #xrm-scan-live (root dışı) güncellenir.
- */
+/** Donmuş dashboard sekmesinde bile DOM güncelle. */
 async function pushLiveProgressToDashboards(
   payload: { foundUsersCount?: number; debug?: string } | null,
   mode: 'progress' | 'clear' = 'progress'
@@ -77,7 +92,6 @@ async function pushLiveProgressToDashboards(
       try {
         await chrome.scripting.executeScript({
           target: { tabId: tab.id },
-          // MAIN: extension sayfasındaki React ile aynı world — DOM + CustomEvent
           world: 'MAIN',
           func: (statusText: string, n: number | null) => {
             const bar = document.getElementById('xrm-scan-live');
@@ -99,7 +113,6 @@ async function pushLiveProgressToDashboards(
               }
             }
 
-            // React uyanıksa state'i de güncellesin
             window.dispatchEvent(
               new CustomEvent('xrm-scan-progress', {
                 detail: { text: statusText, count: n },
@@ -109,19 +122,123 @@ async function pushLiveProgressToDashboards(
           args: [text, count],
         });
       } catch {
-        // Sekme kapalı / henüz yüklenmemiş olabilir
+        // ignore
       }
     })
   );
 }
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+/** X listesini sayfada kaydır — content script donmuş olsa bile SW inject eder. */
+function scrollXListInPage() {
+  const cells = document.querySelectorAll('[data-testid="UserCell"]');
+  const step = 1200;
+  if (cells.length > 0) {
+    const last = cells[cells.length - 1] as HTMLElement;
+    last.scrollIntoView({ behavior: 'auto', block: 'end' });
+    for (let i = Math.max(0, cells.length - 6); i < cells.length; i++) {
+      (cells[i] as HTMLElement).scrollIntoView({ behavior: 'auto', block: 'nearest' });
+    }
+    last.scrollIntoView({ behavior: 'auto', block: 'end' });
+
+    let el: HTMLElement | null = cells[0].parentElement;
+    while (el && el !== document.body) {
+      if (el.scrollHeight > el.clientHeight + 40) {
+        el.scrollTop += step;
+        break;
+      }
+      el = el.parentElement;
+    }
+  }
+  const se = document.scrollingElement || document.documentElement;
+  se.scrollTop += step;
+  window.scrollBy(0, step);
+  se.dispatchEvent(new Event('scroll', { bubbles: true }));
+  window.dispatchEvent(
+    new WheelEvent('wheel', { deltaY: step, bubbles: true, cancelable: true })
+  );
+}
+
+function ensureScanDriver() {
+  if (scanTickTimer != null) return;
+
+  // SW uyumasın
+  if (swKeepAliveTimer == null) {
+    swKeepAliveTimer = setInterval(() => {
+      void chrome.storage.local.get(['activeScanId']);
+    }, 20000);
+  }
+
+  scanTickTimer = setInterval(() => {
+    void runScanTick();
+  }, 900);
+
+  void runScanTick();
+}
+
+function stopScanDriver() {
+  if (scanTickTimer != null) {
+    clearInterval(scanTickTimer);
+    scanTickTimer = null;
+  }
+  if (swKeepAliveTimer != null) {
+    clearInterval(swKeepAliveTimer);
+    swKeepAliveTimer = null;
+  }
+  activeScanTabId = null;
+}
+
+async function runScanTick() {
+  const tabId = activeScanTabId;
+  if (tabId == null) return;
+
+  // 1) Sayfaya doğrudan scroll (arka planda da)
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: scrollXListInPage,
+    });
+  } catch {
+    return;
+  }
+
+  // 2) Content script tick → toplama + progress
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: 'SCAN_TICK' });
+  } catch {
+    // throttle / yok
+  }
+}
+
+function beginScanSession(tabId: number | null | undefined) {
+  if (typeof tabId !== 'number') return;
+  activeScanTabId = tabId;
+  ensureScanDriver();
+  console.log('Scan driver started for tab', tabId);
+}
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === 'SCAN_SESSION_BEGIN') {
+    const tabId = sender.tab?.id ?? message.payload?.tabId;
+    beginScanSession(tabId);
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  if (message?.type === 'SCAN_SESSION_END') {
+    console.log('Scan driver stopped');
+    stopScanDriver();
+    sendResponse({ ok: true });
+    return false;
+  }
+
   if (message?.type === 'SCAN_PROGRESS') {
     void pushLiveProgressToDashboards(message.payload || null, 'progress');
     return false;
   }
 
   if (message?.type === 'SCAN_COMPLETED') {
+    stopScanDriver();
     void pushLiveProgressToDashboards(null, 'clear');
     broadcastToDashboards({ type: 'SCAN_COMPLETED', payload: message.payload });
     sendResponse({ ok: true });
@@ -130,6 +247,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message?.type === 'SCAN_ERROR') {
     console.warn('Service worker: scan error', message.payload?.error);
+    stopScanDriver();
     void chrome.action.setBadgeText({ text: '!' });
     void pushLiveProgressToDashboards(null, 'clear');
     broadcastToDashboards({ type: 'SCAN_ERROR', payload: message.payload });
@@ -138,7 +256,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return false;
 });
 
-// sendMessage kaçsa bile storage değişince dashboard DOM'unu güncelle
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
 
@@ -146,16 +263,18 @@ chrome.storage.onChanged.addListener((changes, area) => {
     const v = changes.scanProgress.newValue;
     if (v && v.foundUsersCount != null) {
       void pushLiveProgressToDashboards(v, 'progress');
-    } else if (changes.scanProgress.newValue == null) {
-      // null yazıldıysa temizle — ama completed sonrası dashboard kendi UI'sını yönetir
-      // cancelled/completed sırasında clear
     }
   }
 
-  if (changes.scanStatus?.newValue === 'completed' || changes.scanStatus?.newValue === 'cancelled') {
+  if (
+    changes.scanStatus?.newValue === 'completed' ||
+    changes.scanStatus?.newValue === 'cancelled'
+  ) {
+    stopScanDriver();
     void pushLiveProgressToDashboards(null, 'clear');
   }
   if (changes.scanStatus?.newValue === 'error') {
+    stopScanDriver();
     void chrome.action.setBadgeText({ text: '!' });
     void pushLiveProgressToDashboards(null, 'clear');
   }
