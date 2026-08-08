@@ -324,9 +324,10 @@ const Dashboard: React.FC = () => {
       } catch {
         // ignore
       }
+      // 7500+ hesaplar uzun sürer — 60 dk timeout
       const followingResult = await waitForScanResult(
         followingScanId,
-        15 * 60 * 1000,
+        60 * 60 * 1000,
         () => scanAbortRef.current
       );
       if (followingResult.status === 'error') {
@@ -368,7 +369,7 @@ const Dashboard: React.FC = () => {
       }
       const followersResult = await waitForScanResult(
         followersScanId,
-        15 * 60 * 1000,
+        60 * 60 * 1000,
         () => scanAbortRef.current
       );
       if (followersResult.status === 'error') {
@@ -831,9 +832,9 @@ async function openScanPopup(
   const win = await chrome.windows.create({
     url,
     type: 'popup',
-    width: 1100,
-    height: 900,
-    // false: dashboard odağı kaybetmez → progress canlı kalır
+    // Daha yüksek pencere → sanal listede daha fazla hücre yüklenir
+    width: 1200,
+    height: 1000,
     focused,
   });
 
@@ -921,7 +922,7 @@ function waitForScanResult(
       done = true;
       chrome.storage.onChanged.removeListener(onChange);
       clearInterval(poll);
-      reject(new Error('Tarama zaman aşımına uğradı (15 dk).'));
+      reject(new Error('Tarama zaman aşımına uğradı (60 dk).'));
     }, timeoutMs);
   });
 }
