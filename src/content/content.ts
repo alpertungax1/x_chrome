@@ -202,9 +202,17 @@ function initContentScript() {
       return false;
     }
 
-    // SW arka plan sürücüsü — başka sekmelerde gezerken tarama dursun diye
+    // SW overlay metni
+    if ((message.type as string) === 'SCAN_OVERLAY') {
+      const text = (message.payload as { text?: string })?.text;
+      if (text) showScanOverlay(text);
+      sendResponse({ ok: true });
+      return false;
+    }
+
+    // Eski tick — yedek (SW artık ana sürücü)
     if (message.type === 'SCAN_TICK') {
-      scanner.backgroundTick();
+      if (scanner.isRunning()) scanner.backgroundTick();
       sendResponse({ ok: true, running: scanner.isRunning() });
       return false;
     }
@@ -214,98 +222,67 @@ function initContentScript() {
         (message.payload && (message.payload as { scanId?: string }).scanId) ||
         `scan_${Date.now()}`;
 
-      // Hemen ACK — tarama bitene kadar bekletme
+      // Hemen ACK
       sendResponse({ status: 'started', scanId });
-      showScanOverlay('Tarama başlıyor...');
+      showScanOverlay('Tarama başlıyor (arka plan sürücüsü)…');
 
-      // SW'yi uyanık tut + arka plan tick başlat
+      // SW keep-alive port — tarama SW'de yürür, CS sadece overlay + port
       let scanPort: chrome.runtime.Port | null = null;
       try {
         scanPort = chrome.runtime.connect({ name: 'scan-worker' });
       } catch {
         scanPort = null;
       }
-      safeSendMessage({ type: 'SCAN_SESSION_BEGIN', payload: { scanId } });
 
-      const reportProgress = (progress: {
-        count: number;
-        lastUsername?: string;
-        debug?: string;
-      }) => {
-        const payload = {
-          scanId,
-          foundUsersCount: progress.count,
-          lastUsername: progress.lastUsername,
-          debug: progress.debug,
-          updatedAt: Date.now(),
-          pageUrl: location.href,
-        };
-        const debug = progress.debug ? ` | ${progress.debug}` : '';
-        showScanOverlay(`Bulunan: ${progress.count}${debug}`);
-        chrome.storage.local.set({
-          scanProgress: payload,
-          scanStatus: 'running',
-          activeScanId: scanId,
-        });
-        safeSendMessage({ type: 'SCAN_PROGRESS', payload });
-      };
+      const pageHint = /\/following/i.test(location.pathname)
+        ? 'following'
+        : /\/followers/i.test(location.pathname)
+          ? 'followers'
+          : 'unknown';
 
-      void scanner
-        .startScan(reportProgress)
-        .then(({ users, stopped }) => {
-          const result = {
-            status: (stopped ? 'cancelled' : 'completed') as 'cancelled' | 'completed',
-            scanId,
-            users,
-            completedAt: Date.now(),
-            pageUrl: location.href,
-          };
+      safeSendMessage({
+        type: 'SCAN_SESSION_BEGIN',
+        payload: { scanId, pageHint },
+      });
+
+      // Storage'dan progress → overlay (SW yazıyor)
+      const onStorage = (
+        changes: { [key: string]: chrome.storage.StorageChange },
+        area: string
+      ) => {
+        if (area !== 'local') return;
+        if (changes.scanProgress?.newValue) {
+          const p = changes.scanProgress.newValue;
+          if (p.scanId && p.scanId !== scanId) return;
+          const debug = p.debug ? ` | ${p.debug}` : '';
+          showScanOverlay(`Bulunan: ${p.foundUsersCount ?? 0}${debug}`);
+        }
+        if (
+          changes.scanResult?.newValue &&
+          changes.scanResult.newValue.scanId === scanId
+        ) {
+          const r = changes.scanResult.newValue;
+          const n = r.users?.length ?? 0;
           showScanOverlay(
-            stopped
-              ? `Durduruldu · ${users.length} kullanıcı`
-              : `Tamamlandı · ${users.length} kullanıcı`
+            r.status === 'cancelled'
+              ? `Durduruldu · ${n}`
+              : r.status === 'error'
+                ? `Hata: ${r.error || ''}`
+                : `Tamamlandı · ${n}`
           );
           window.setTimeout(() => hideScanOverlay(), 2500);
+          chrome.storage.onChanged.removeListener(onStorage);
+          try {
+            scanPort?.disconnect();
+          } catch {
+            // ignore
+          }
+        }
+      };
+      chrome.storage.onChanged.addListener(onStorage);
 
-          chrome.storage.local.set({
-            scanProgress: null,
-            scanStatus: result.status,
-            scanResult: result,
-            activeScanId: null,
-          });
-          safeSendMessage({ type: 'SCAN_SESSION_END' });
-          try {
-            scanPort?.disconnect();
-          } catch {
-            // ignore
-          }
-          if (!stopped) {
-            safeSendMessage({ type: 'SCAN_COMPLETED', payload: { users, scanId } });
-          }
-        })
-        .catch((err: Error) => {
-          const result = {
-            status: 'error' as const,
-            scanId,
-            error: err?.message || String(err),
-            completedAt: Date.now(),
-          };
-          showScanOverlay(`Hata: ${result.error}`);
-          window.setTimeout(() => hideScanOverlay(), 4000);
-          chrome.storage.local.set({
-            scanProgress: null,
-            scanStatus: 'error',
-            scanResult: result,
-            activeScanId: null,
-          });
-          safeSendMessage({ type: 'SCAN_SESSION_END' });
-          try {
-            scanPort?.disconnect();
-          } catch {
-            // ignore
-          }
-          safeSendMessage({ type: 'SCAN_ERROR', payload: { error: result.error, scanId } });
-        });
+      // NOT: Ana tarama döngüsü Artık SW'de (executeScript).
+      // Content script arka planda donsa bile tarama devam eder.
 
       return false;
     }

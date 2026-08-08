@@ -6,6 +6,7 @@ export type MessageType =
   | "SCAN_STARTED"
   | "SCAN_STOP"
   | "SCAN_TICK"
+  | "SCAN_OVERLAY"
   | "SCAN_SESSION_BEGIN"
   | "SCAN_SESSION_END"
   | "SCAN_PROGRESS"

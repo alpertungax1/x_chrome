@@ -324,10 +324,10 @@ const Dashboard: React.FC = () => {
       } catch {
         // ignore
       }
-      // 7500+ hesaplar uzun sürer — 60 dk timeout
+      // 7500+ hesaplar uzun sürer — 3 saat (SW arka planda sürer)
       const followingResult = await waitForScanResult(
         followingScanId,
-        60 * 60 * 1000,
+        3 * 60 * 60 * 1000,
         () => scanAbortRef.current
       );
       if (followingResult.status === 'error') {
@@ -369,7 +369,7 @@ const Dashboard: React.FC = () => {
       }
       const followersResult = await waitForScanResult(
         followersScanId,
-        60 * 60 * 1000,
+        3 * 60 * 60 * 1000,
         () => scanAbortRef.current
       );
       if (followersResult.status === 'error') {
@@ -847,22 +847,37 @@ async function openScanPopup(
 }
 
 async function startScanOnTab(tabId: number, scanId: string): Promise<void> {
-  // SW arka plan sürücüsü (başka sekmelerde gezerken scroll/tick)
+  let pageHint: 'following' | 'followers' | 'unknown' = 'unknown';
   try {
-    await chrome.runtime.sendMessage({
-      type: 'SCAN_SESSION_BEGIN',
-      payload: { tabId, scanId },
-    });
+    const tab = await chrome.tabs.get(tabId);
+    const url = tab.url || '';
+    if (/\/following/i.test(url)) pageHint = 'following';
+    else if (/\/followers/i.test(url)) pageHint = 'followers';
   } catch {
     // ignore
   }
 
-  const res = await sendTabMessage<{ status?: string; scanId?: string }>(tabId, {
-    type: 'SCAN_STARTED',
-    payload: { scanId },
-  });
-  if (res?.status !== 'started' && res?.status !== 'success') {
-    throw new Error('Tarama başlatılamadı (content script ACK vermedi).');
+  // SW ana sürücü — content donmasa da executeScript ile scrape+scroll
+  try {
+    await chrome.runtime.sendMessage({
+      type: 'SCAN_SESSION_BEGIN',
+      payload: { tabId, scanId, pageHint },
+    });
+  } catch (err) {
+    console.warn('SCAN_SESSION_BEGIN failed', err);
+  }
+
+  // Overlay + keep-alive port için content'e haber ver (zorunlu değil ama iyi)
+  try {
+    const res = await sendTabMessage<{ status?: string; scanId?: string }>(tabId, {
+      type: 'SCAN_STARTED',
+      payload: { scanId },
+    });
+    if (res?.status !== 'started' && res?.status !== 'success') {
+      console.warn('Content SCAN_STARTED ACK yok — SW yine de tarayacak');
+    }
+  } catch (err) {
+    console.warn('Content SCAN_STARTED failed — SW yine de tarayacak', err);
   }
 }
 
@@ -932,7 +947,11 @@ function waitForScanResult(
       done = true;
       chrome.storage.onChanged.removeListener(onChange);
       clearInterval(poll);
-      reject(new Error('Tarama zaman aşımına uğradı (60 dk).'));
+      reject(
+        new Error(
+          'Tarama zaman aşımına uğradı (3 saat). Popup açık kalsın; tarama arka planda SW ile sürer.'
+        )
+      );
     }, timeoutMs);
   });
 }
