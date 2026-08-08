@@ -9,12 +9,18 @@ interface ScanProgress {
 }
 
 /**
- * X following/followers sanal listesini agresif kaydırarak tarar.
- * 5k–10k+ listelerde erken kesilmemesi için:
- * - uzun "boş" toleransı
- * - doğru scroll container
- * - takılınca kurtarma (alta zıpla, yukarı-aşağı, End tuşu)
- * - yavaş ağda bekleme backoff
+ * X following/followers sanal listesi tarayıcısı.
+ *
+ * 2k civarında erken kesilme genelde:
+ *  - rate limit / yavaş API → kısa "boş tur" limitine takılma
+ *  - scroll container yanlış → liste yüklenmiyor
+ *  - sanal listede "alta zıplama" yetmez
+ *
+ * Strateji:
+ *  - Sayfadaki hedef sayıyı oku (7500 Following)
+ *  - Hedefin %97'sine ulaşmadan SADECE uzun kurtarma + bekleme ile dur
+ *  - MutationObserver ile yeni hücre bekle
+ *  - Rate-limit molaları (10s / 20s / 40s)
  */
 export class XScanner {
   private isScanning = false;
@@ -29,7 +35,7 @@ export class XScanner {
     if (this.isScanning) {
       logger.warn('Scanner', 'Previous scan still running — stopping it first');
       this.isScanning = false;
-      await this.wait(300);
+      await this.wait(400);
     }
 
     this.isScanning = true;
@@ -38,117 +44,150 @@ export class XScanner {
     this.scrollRoot = null;
     logger.log('Scanner', '=== SCAN STARTED ===', location.href);
 
-    const ready = await this.waitForUserCells(20000);
-    if (!this.isScanning) {
-      return this.finish(true, onProgress);
-    }
+    const ready = await this.waitForUserCells(25000);
+    if (!this.isScanning) return this.finish(true, onProgress);
 
     this.scrollRoot = this.findScrollRoot();
+    const expected = this.readExpectedCount();
+    logger.log('Scanner', 'Expected count from page', expected);
+
     onProgress({
       count: 0,
       debug: ready
-        ? `Liste hazır | scroll=${this.describeRoot(this.scrollRoot)}`
-        : 'UserCell yok — taranıyor',
+        ? `Liste hazır | hedef≈${expected ?? '?'} | ${this.describeRoot(this.scrollRoot)}`
+        : 'UserCell yok',
     });
 
-    let consecutiveNoNewUsers = 0;
-    // ~150 * ~0.6–1.5s ≈ 2–4 dk hiç yeni kullanıcı gelmezse dur
-    // (büyük listelerde ara ara X yavaşlar; 42 sn çok kısaydı)
-    const MAX_CONSECUTIVE_EMPTY = 150;
-    let lastProgressReport = 0;
     let scrollIteration = 0;
     let lastCount = 0;
-    let stagnantRounds = 0;
+    let lastGrowthAt = Date.now();
     let lastScrollHeight = 0;
-    let recoveryLevel = 0;
+    let fullRecoveryCycles = 0;
+    let lastProgressReport = 0;
+
+    // Sert tavan: güvenlik (saatlerce dönmesin) — 90 dk
+    const hardDeadline = Date.now() + 90 * 60 * 1000;
 
     while (this.isScanning) {
-      scrollIteration++;
-
-      // Her 25 iterasyonda scroll root'u yeniden bul (SPA layout değişebilir)
-      if (scrollIteration % 25 === 0 || !this.scrollRoot?.isConnected) {
-        this.scrollRoot = this.findScrollRoot();
-      }
-
-      const cellsInDOM = document.querySelectorAll('[data-testid="UserCell"]').length;
-      const usersFoundThisRound = this.scanCurrentPage();
-
-      let newCount = 0;
-      for (const user of usersFoundThisRound) {
-        if (user.id && !this.collectedUsers.has(user.id)) {
-          this.collectedUsers.set(user.id, user);
-          newCount++;
-        }
-      }
-
-      // Link tabanlı ek toplama (UserCell parse kaçırırsa)
-      const extra = this.scanProfileLinksInTimeline();
-      for (const user of extra) {
-        if (user.id && !this.collectedUsers.has(user.id)) {
-          this.collectedUsers.set(user.id, user);
-          newCount++;
-        }
-      }
-
-      if (newCount > 0) {
-        consecutiveNoNewUsers = 0;
-        recoveryLevel = 0;
-        stagnantRounds = 0;
-      } else {
-        consecutiveNoNewUsers++;
-      }
-
-      if (this.collectedUsers.size === lastCount) {
-        stagnantRounds++;
-      } else {
-        stagnantRounds = 0;
-        lastCount = this.collectedUsers.size;
-      }
-
-      const root = this.scrollRoot;
-      const scrollHeight = root?.scrollHeight ?? 0;
-      const scrollGrew = scrollHeight > lastScrollHeight + 20;
-      if (scrollGrew) lastScrollHeight = scrollHeight;
-
-      const now = Date.now();
-      if (now - lastProgressReport > 800 || newCount > 0) {
-        lastProgressReport = now;
-        onProgress({
-          count: this.collectedUsers.size,
-          debug: `Scroll#${scrollIteration} | DOM:${cellsInDOM} | +${newCount} | boş:${consecutiveNoNewUsers}/${MAX_CONSECUTIVE_EMPTY} | sh:${scrollHeight}`,
-        });
-      }
-
-      // "Retry" / hata paneli varsa tıkla
-      this.clickRetryIfPresent();
-
-      if (consecutiveNoNewUsers >= MAX_CONSECUTIVE_EMPTY) {
-        // Son bir kurtarma denemesi
-        if (recoveryLevel < 4) {
-          recoveryLevel++;
-          await this.recoverStuck(recoveryLevel);
-          consecutiveNoNewUsers = Math.floor(MAX_CONSECUTIVE_EMPTY * 0.6);
-          continue;
-        }
+      if (Date.now() > hardDeadline) {
+        logger.warn('Scanner', 'Hard deadline reached');
         break;
       }
 
-      // Takılma: bir süre yeni yoksa kademeli kurtarma
-      if (consecutiveNoNewUsers > 0 && consecutiveNoNewUsers % 20 === 0) {
-        recoveryLevel = Math.min(4, recoveryLevel + 1);
-        await this.recoverStuck(recoveryLevel);
-      } else {
-        this.performScroll(consecutiveNoNewUsers);
+      scrollIteration++;
+      if (scrollIteration % 15 === 0 || !this.scrollRoot?.isConnected) {
+        this.scrollRoot = this.findScrollRoot();
       }
 
-      // Yeni kullanıcı yoksa daha uzun bekle (ağ / rate limit)
-      const delay =
-        newCount > 0
-          ? 350
-          : scrollGrew
-            ? 600
-            : Math.min(2200, 500 + consecutiveNoNewUsers * 40);
-      await this.wait(delay);
+      // Periyodik hedef sayıyı yenile (header geç yüklenebilir)
+      const expectedNow = this.readExpectedCount() ?? expected;
+
+      const beforeSize = this.collectedUsers.size;
+      const newCount = this.collectFromDom();
+      const cellsInDOM = document.querySelectorAll('[data-testid="UserCell"]').length;
+
+      if (newCount > 0 || this.collectedUsers.size > lastCount) {
+        lastCount = this.collectedUsers.size;
+        lastGrowthAt = Date.now();
+        fullRecoveryCycles = 0;
+      }
+
+      const root = this.scrollRoot!;
+      const sh = root.scrollHeight;
+      if (sh > lastScrollHeight + 10) lastScrollHeight = sh;
+
+      const noGrowthMs = Date.now() - lastGrowthAt;
+      const ratio =
+        expectedNow && expectedNow > 0
+          ? this.collectedUsers.size / expectedNow
+          : null;
+
+      const now = Date.now();
+      if (now - lastProgressReport > 700 || newCount > 0) {
+        lastProgressReport = now;
+        const pct = ratio != null ? ` | ${Math.round(ratio * 100)}%` : '';
+        onProgress({
+          count: this.collectedUsers.size,
+          debug: `Scroll#${scrollIteration} | DOM:${cellsInDOM} | +${newCount} | hedef:${expectedNow ?? '?'}${pct} | durgun:${Math.round(noGrowthMs / 1000)}s | rec:${fullRecoveryCycles}`,
+        });
+      }
+
+      // Hedefe yeterince yaklaştıysak bitir
+      if (expectedNow && expectedNow >= 50 && this.collectedUsers.size >= expectedNow * 0.98) {
+        // Son 2 sn daha dene
+        await this.gentleScrollAndWait(800);
+        this.collectFromDom();
+        if (this.collectedUsers.size >= expectedNow * 0.98) break;
+      }
+
+      // Gerçek bitiş: uzun süre büyüme yok + kurtarma tükendi
+      // Hedef biliniyorsa ve gerideysek ÇOK daha sabırlı ol
+      const belowTarget =
+        expectedNow != null && expectedNow > 100 && this.collectedUsers.size < expectedNow * 0.95;
+
+      const stagnantSoft = noGrowthMs > 45_000; // 45 sn
+      const stagnantHard = noGrowthMs > (belowTarget ? 180_000 : 90_000); // 3 dk / 1.5 dk
+
+      if (stagnantSoft) {
+        this.clickRetryIfPresent();
+        fullRecoveryCycles++;
+        await this.recoverStuck(fullRecoveryCycles, belowTarget);
+
+        // Kurtarma sonrası hemen topla
+        this.collectFromDom();
+        if (this.collectedUsers.size > lastCount) {
+          lastCount = this.collectedUsers.size;
+          lastGrowthAt = Date.now();
+          fullRecoveryCycles = 0;
+          continue;
+        }
+      }
+
+      if (stagnantHard && fullRecoveryCycles >= (belowTarget ? 8 : 5)) {
+        // Hâlâ hedefin altındaysak bir tur daha uzun bekle (rate limit)
+        if (belowTarget && fullRecoveryCycles < 12) {
+          onProgress({
+            count: this.collectedUsers.size,
+            debug: `Rate-limit molası 30s… (${this.collectedUsers.size}/${expectedNow})`,
+          });
+          await this.wait(30000);
+          this.clickRetryIfPresent();
+          await this.recoverStuck(fullRecoveryCycles + 1, true);
+          this.collectFromDom();
+          if (this.collectedUsers.size > lastCount) {
+            lastCount = this.collectedUsers.size;
+            lastGrowthAt = Date.now();
+            fullRecoveryCycles = 0;
+            continue;
+          }
+          fullRecoveryCycles++;
+          continue;
+        }
+        logger.log(
+          'Scanner',
+          `Stopping: stagnant. found=${this.collectedUsers.size} expected=${expectedNow}`
+        );
+        break;
+      }
+
+      // Normal kaydır + yeni hücre bekle
+      this.performScroll();
+      const grew = await this.waitForDomGrowth(beforeSize, 1200);
+      if (!grew) {
+        // Kısa ek kaydırma
+        this.performScroll();
+        await this.waitForDomGrowth(this.collectedUsers.size, 800);
+      }
+
+      // Yavaş tempoda da topla
+      this.collectFromDom();
+    }
+
+    // Bitiş öncesi son tarama
+    for (let i = 0; i < 5 && this.isScanning; i++) {
+      this.performScroll();
+      await this.wait(500);
+      this.collectFromDom();
     }
 
     return this.finish(this._stopRequested, onProgress);
@@ -162,7 +201,9 @@ export class XScanner {
     this.isScanning = false;
     onProgress({
       count: this.collectedUsers.size,
-      debug: stopped ? 'Tarama durduruldu.' : `Tarama tamamlandı (${this.collectedUsers.size}).`,
+      debug: stopped
+        ? 'Tarama durduruldu.'
+        : `Tarama tamamlandı (${this.collectedUsers.size}).`,
     });
     logger.log(
       'Scanner',
@@ -183,32 +224,156 @@ export class XScanner {
     return this.isScanning;
   }
 
+  /** DOM'dan kullanıcı topla; yeni eklenen sayısını döndür. */
+  private collectFromDom(): number {
+    let added = 0;
+    const cells = document.querySelectorAll('[data-testid="UserCell"]');
+    cells.forEach((cell) => {
+      const user = parseUserFromElement(cell as HTMLElement);
+      if (user?.id && !this.collectedUsers.has(user.id)) {
+        this.collectedUsers.set(user.id, user);
+        added++;
+      }
+    });
+    for (const user of this.scanProfileLinksInTimeline()) {
+      if (user.id && !this.collectedUsers.has(user.id)) {
+        this.collectedUsers.set(user.id, user);
+        added++;
+      }
+    }
+    return added;
+  }
+
+  /**
+   * Header'daki "1,234 Following" / "Following 1234" sayısını oku.
+   */
+  private readExpectedCount(): number | null {
+    try {
+      const primary =
+        document.querySelector('[data-testid="primaryColumn"]') || document.body;
+      const text = primary.textContent || '';
+
+      // "7,543 Following" / "7.543 Following" / "Following 7543"
+      const patterns = [
+        /([\d.,\s]+)\s*Following\b/i,
+        /([\d.,\s]+)\s*Takip\s*edilen/i,
+        /Following\s*([\d.,\s]+)/i,
+        /Takip\s*edilen\s*([\d.,\s]+)/i,
+        /([\d.,\s]+)\s*Followers\b/i,
+        /([\d.,\s]+)\s*Takipçi/i,
+      ];
+
+      const path = location.pathname.toLowerCase();
+      const wantFollowing = path.includes('/following');
+      const wantFollowers = path.includes('/followers');
+
+      for (const re of patterns) {
+        const m = text.match(re);
+        if (!m) continue;
+        const label = m[0].toLowerCase();
+        if (wantFollowing && label.includes('follower')) continue;
+        if (wantFollowers && label.includes('following') && !label.includes('follower'))
+          continue;
+        if (wantFollowing && !(label.includes('following') || label.includes('takip edilen')))
+          continue;
+
+        const n = this.parseCount(m[1]);
+        if (n != null && n >= 1 && n < 50_000_000) return n;
+      }
+
+      // aria / link title
+      const links = Array.from(
+        document.querySelectorAll<HTMLAnchorElement>('a[href$="/following"], a[href$="/followers"]')
+      );
+      for (const a of links) {
+        const href = a.getAttribute('href') || '';
+        if (wantFollowing && !href.endsWith('/following')) continue;
+        if (wantFollowers && !href.includes('followers')) continue;
+        const n = this.parseCount(a.textContent || a.getAttribute('title') || '');
+        if (n != null && n >= 1) return n;
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  }
+
+  private parseCount(raw: string): number | null {
+    // "7,543" | "7.543" | "7 543" | "7.5K" | "7,5 B"
+    let s = raw.trim().replace(/\s/g, '');
+    const kMatch = s.match(/^([\d.,]+)([KkMmBb])$/);
+    if (kMatch) {
+      let n = parseFloat(kMatch[1].replace(',', '.'));
+      const u = kMatch[2].toUpperCase();
+      if (u === 'K') n *= 1_000;
+      if (u === 'M' || u === 'B') n *= 1_000_000;
+      return Math.round(n);
+    }
+    // binlik ayırıcı: 7.543 veya 7,543 → 7543 (3 basamak grup)
+    if (/^\d{1,3}([.,]\d{3})+$/.test(s)) {
+      return parseInt(s.replace(/[.,]/g, ''), 10);
+    }
+    s = s.replace(/[^\d]/g, '');
+    if (!s) return null;
+    const n = parseInt(s, 10);
+    return Number.isFinite(n) ? n : null;
+  }
+
   private async waitForUserCells(timeoutMs: number): Promise<boolean> {
     const start = Date.now();
     while (Date.now() - start < timeoutMs && this.isScanning) {
-      if (document.querySelectorAll('[data-testid="UserCell"]').length > 0) {
-        return true;
-      }
-      window.scrollBy(0, 300);
-      this.performScroll(0);
-      await this.wait(400);
+      if (document.querySelectorAll('[data-testid="UserCell"]').length > 0) return true;
+      window.scrollBy(0, 240);
+      await this.wait(350);
     }
     return false;
   }
 
-  private scanCurrentPage(): Partial<XUser>[] {
-    const userCells = document.querySelectorAll('[data-testid="UserCell"]');
-    const users: Partial<XUser>[] = [];
-    userCells.forEach((cell) => {
-      const user = parseUserFromElement(cell as HTMLElement);
-      if (user) users.push(user);
+  /** Scroll sonrası yeni UserCell / yeni kullanıcı için bekle. */
+  private waitForDomGrowth(prevUserCount: number, timeoutMs: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      if (!this.isScanning) {
+        resolve(false);
+        return;
+      }
+      if (this.collectedUsers.size > prevUserCount) {
+        resolve(true);
+        return;
+      }
+
+      const root =
+        document.querySelector('[data-testid="primaryColumn"]') ||
+        document.body;
+
+      let done = false;
+      const finish = (ok: boolean) => {
+        if (done) return;
+        done = true;
+        observer.disconnect();
+        clearTimeout(timer);
+        resolve(ok);
+      };
+
+      const observer = new MutationObserver(() => {
+        this.collectFromDom();
+        if (this.collectedUsers.size > prevUserCount) finish(true);
+      });
+
+      observer.observe(root, { childList: true, subtree: true });
+
+      const timer = window.setTimeout(() => {
+        this.collectFromDom();
+        finish(this.collectedUsers.size > prevUserCount);
+      }, timeoutMs);
     });
-    return users;
   }
 
-  /**
-   * Timeline içindeki profil linklerinden kullanıcı topla (UserCell parse yedek).
-   */
+  private async gentleScrollAndWait(ms: number): Promise<void> {
+    this.performScroll();
+    await this.wait(ms);
+    this.collectFromDom();
+  }
+
   private scanProfileLinksInTimeline(): Partial<XUser>[] {
     const root =
       document.querySelector('[data-testid="primaryColumn"]') ||
@@ -217,36 +382,14 @@ export class XScanner {
 
     const links = root.querySelectorAll('a[href^="/"]');
     const skip = new Set([
-      'home',
-      'explore',
-      'search',
-      'notifications',
-      'messages',
-      'settings',
-      'i',
-      'compose',
-      'following',
-      'followers',
-      'verified_followers',
-      'likes',
-      'lists',
-      'communities',
-      'premium',
-      'jobs',
-      'connect',
-      'intent',
-      'hashtag',
-      'tos',
-      'privacy',
-      'login',
-      'signup',
-      'logout',
-      'grok',
-      'bookmarks',
-      'topics',
+      'home', 'explore', 'search', 'notifications', 'messages', 'settings', 'i',
+      'compose', 'following', 'followers', 'verified_followers', 'likes', 'lists',
+      'communities', 'premium', 'jobs', 'connect', 'intent', 'hashtag', 'tos',
+      'privacy', 'login', 'signup', 'logout', 'grok', 'bookmarks', 'topics',
+      'status', 'photo', 'header_photo',
     ]);
 
-    const found = new Map<string, Partial<XUser>>();
+    const found: Partial<XUser>[] = [];
     const pageIsFollowing = /\/following\/?$/i.test(location.pathname);
     const pageIsFollowers = /\/followers|verified_followers\/?$/i.test(location.pathname);
 
@@ -256,17 +399,16 @@ export class XScanner {
       if (!m) continue;
       const username = m[1];
       if (skip.has(username.toLowerCase())) continue;
-      // Sadece UserCell içindeki veya cell yakınındaki linkler
       const cell = (a as HTMLElement).closest('[data-testid="UserCell"]');
       if (!cell) continue;
 
       const id = username.toLowerCase();
-      if (found.has(id) || this.collectedUsers.has(id)) continue;
+      if (this.collectedUsers.has(id)) continue;
 
       const displayName =
         cell.querySelector('div[dir="auto"] span')?.textContent?.trim() || username;
 
-      found.set(id, {
+      found.push({
         id,
         username,
         displayName,
@@ -281,8 +423,7 @@ export class XScanner {
         lastSeenAt: Date.now(),
       });
     }
-
-    return Array.from(found.values());
+    return found;
   }
 
   private findScrollRoot(): HTMLElement {
@@ -296,7 +437,6 @@ export class XScanner {
         const scrollable =
           (oy === 'auto' || oy === 'scroll' || oy === 'overlay') &&
           el.scrollHeight > el.clientHeight + 80;
-        // X bazen overflow gizli tutar ama yine de scroll edilebilir
         const tall = el.scrollHeight > el.clientHeight + 200;
         if (scrollable || tall) {
           best = el;
@@ -323,116 +463,119 @@ export class XScanner {
 
   private describeRoot(root: HTMLElement | null): string {
     if (!root) return 'none';
-    const tag = root.tagName.toLowerCase();
-    const testid = root.getAttribute('data-testid') || '';
-    return `${tag}${testid ? '#' + testid : ''} sh=${root.scrollHeight}`;
+    return `${root.tagName.toLowerCase()} sh=${root.scrollHeight}`;
   }
 
-  private performScroll(emptyStreak: number): void {
+  private performScroll(): void {
     try {
       const root = this.scrollRoot || this.findScrollRoot();
       this.scrollRoot = root;
       const cells = document.querySelectorAll('[data-testid="UserCell"]');
-      const step = emptyStreak > 10 ? 1400 : emptyStreak > 5 ? 1100 : 900;
+      const step = 1000;
 
-      // 1) Son hücreye scrollIntoView — virtualized list tetikleyici
       if (cells.length > 0) {
         const last = cells[cells.length - 1] as HTMLElement;
         last.scrollIntoView({ behavior: 'auto', block: 'end' });
-        // Birkaç hücre geriye de dokun (intersection observer)
-        const mid = cells[Math.max(0, cells.length - 5)] as HTMLElement;
-        mid?.scrollIntoView({ behavior: 'auto', block: 'nearest' });
+        // virtual list: son birkaç hücreyi de "görünür" yap
+        for (let i = Math.max(0, cells.length - 8); i < cells.length; i++) {
+          (cells[i] as HTMLElement).scrollIntoView({ behavior: 'auto', block: 'nearest' });
+        }
+        last.scrollIntoView({ behavior: 'auto', block: 'end' });
       }
 
-      // 2) Scroll root
       const before = root.scrollTop;
-      root.scrollTop = Math.min(root.scrollTop + step, root.scrollHeight);
-      if (root.scrollTop === before) {
-        // takıldıysa doğrudan alta
-        root.scrollTop = root.scrollHeight;
+      root.scrollBy({ top: step, left: 0, behavior: 'auto' });
+      if (Math.abs(root.scrollTop - before) < 5) {
+        root.scrollTop = Math.min(root.scrollTop + step, root.scrollHeight);
       }
+      // Küçük bir "overscroll" — intersection observer tetikler
+      root.scrollTop = Math.min(root.scrollTop + 80, root.scrollHeight);
 
-      // 3) Window yedek
       window.scrollBy(0, step);
       const se = document.scrollingElement;
-      if (se && se !== root) {
-        se.scrollTop += step;
-      }
+      if (se && se !== root) se.scrollTop += step;
 
-      // 4) Wheel event (bazı virtual list'ler bunu dinler)
       root.dispatchEvent(
-        new WheelEvent('wheel', {
-          deltaY: step,
-          bubbles: true,
-          cancelable: true,
-        })
+        new WheelEvent('wheel', { deltaY: step, bubbles: true, cancelable: true })
       );
 
-      // 5) primaryColumn alt ağacı
-      const primary = document.querySelector('[data-testid="primaryColumn"]') as HTMLElement | null;
-      if (primary && primary !== root) {
-        let el: HTMLElement | null = primary;
-        while (el && el !== document.body) {
-          if (el.scrollHeight > el.clientHeight + 50) {
-            el.scrollTop += step;
-            break;
-          }
-          el = el.parentElement;
-        }
-      }
+      // Scroll event'i de fırlat
+      root.dispatchEvent(new Event('scroll', { bubbles: true }));
     } catch (err) {
       logger.warn('Scanner', 'performScroll error', err);
     }
   }
 
-  /** Takılınca kademeli kurtarma */
-  private async recoverStuck(level: number): Promise<void> {
+  private async recoverStuck(level: number, aggressive: boolean): Promise<void> {
     if (!this.isScanning) return;
     const root = this.scrollRoot || this.findScrollRoot();
     this.scrollRoot = root;
-    logger.log('Scanner', `Recovery level ${level}`, this.collectedUsers.size);
+    logger.log('Scanner', `Recovery L${level} aggressive=${aggressive}`, this.collectedUsers.size);
 
     try {
-      if (level >= 1) {
-        // Alta zıpla
+      this.clickRetryIfPresent();
+
+      // L1: alta zıpla + bekle
+      root.scrollTop = root.scrollHeight;
+      window.scrollTo(0, document.body.scrollHeight);
+      await this.wait(aggressive ? 2000 : 1200);
+      this.collectFromDom();
+      if (!this.isScanning) return;
+
+      // L2: yukarı çık, tekrar in
+      if (level >= 2) {
+        const up = Math.max(0, root.scrollTop - root.clientHeight * 3);
+        root.scrollTop = up;
+        await this.wait(700);
+        for (let i = 0; i < 6 && this.isScanning; i++) {
+          root.scrollTop += root.clientHeight * 0.8;
+          await this.wait(400);
+          this.collectFromDom();
+        }
         root.scrollTop = root.scrollHeight;
-        window.scrollTo(0, document.body.scrollHeight);
-        await this.wait(1200);
+        await this.wait(1500);
       }
-      if (level >= 2 && this.isScanning) {
-        // Yukarı çıkıp tekrar in (virtual list yenile)
-        const mid = Math.max(0, root.scrollTop - root.clientHeight * 2);
-        root.scrollTop = mid;
-        await this.wait(600);
-        root.scrollTop = root.scrollHeight;
-        await this.wait(1200);
-      }
-      if (level >= 3 && this.isScanning) {
-        // Klavye: PageDown / End
-        const target = (document.activeElement as HTMLElement) || document.body;
-        target.dispatchEvent(
-          new KeyboardEvent('keydown', { key: 'PageDown', code: 'PageDown', bubbles: true })
-        );
-        await this.wait(400);
-        target.dispatchEvent(
+
+      // L3: klavye
+      if (level >= 3) {
+        const t = document.body;
+        for (let i = 0; i < 8 && this.isScanning; i++) {
+          t.dispatchEvent(
+            new KeyboardEvent('keydown', { key: 'PageDown', code: 'PageDown', bubbles: true })
+          );
+          await this.wait(350);
+          this.collectFromDom();
+        }
+        t.dispatchEvent(
           new KeyboardEvent('keydown', { key: 'End', code: 'End', bubbles: true })
         );
         root.scrollTop = root.scrollHeight;
-        await this.wait(1500);
+        await this.wait(2000);
       }
-      if (level >= 4 && this.isScanning) {
-        // Son hücreyi tekrar görünür kıl + uzun bekle
-        const cells = document.querySelectorAll('[data-testid="UserCell"]');
-        if (cells.length > 0) {
-          (cells[cells.length - 1] as HTMLElement).scrollIntoView({
-            behavior: 'auto',
-            block: 'center',
-          });
-        }
+
+      // L4+: uzun rate-limit molası
+      if (level >= 4) {
+        const pause = aggressive ? Math.min(45000, 10000 + level * 4000) : 8000;
+        await this.wait(pause);
         this.clickRetryIfPresent();
-        await this.wait(2500);
+        root.scrollTop = root.scrollHeight;
+        await this.wait(2000);
+        // Küçük rastgele yukarı-aşağı
+        root.scrollTop = Math.max(0, root.scrollTop - 600);
+        await this.wait(500);
         root.scrollTop = root.scrollHeight;
         await this.wait(1500);
+      }
+
+      // L6+: sayfayı hafif "salla"
+      if (level >= 6) {
+        for (let i = 0; i < 10 && this.isScanning; i++) {
+          root.scrollTop = Math.max(0, root.scrollHeight - root.clientHeight - i * 200);
+          await this.wait(300);
+          root.scrollTop = root.scrollHeight;
+          await this.wait(500);
+          this.collectFromDom();
+        }
       }
     } catch (err) {
       logger.warn('Scanner', 'recoverStuck error', err);
@@ -440,20 +583,22 @@ export class XScanner {
   }
 
   private clickRetryIfPresent(): void {
-    const buttons = Array.from(document.querySelectorAll('div[role="button"], button'));
-    for (const btn of buttons) {
+    const nodes = Array.from(
+      document.querySelectorAll('div[role="button"], button, span')
+    );
+    for (const btn of nodes) {
       const t = (btn.textContent || '').trim().toLowerCase();
       if (
         t === 'retry' ||
         t === 'try again' ||
         t === 'yeniden dene' ||
         t === 'tekrar dene' ||
-        t.includes('something went wrong') ||
-        t.includes('bir hata oluştu')
+        t === 'reload' ||
+        (t.includes('retry') && t.length < 40)
       ) {
         (btn as HTMLElement).click();
-        logger.log('Scanner', 'Clicked retry button');
-        break;
+        logger.log('Scanner', 'Clicked retry');
+        return;
       }
     }
   }
