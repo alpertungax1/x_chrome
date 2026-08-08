@@ -1,0 +1,53 @@
+export interface XUser {
+  id: string; // The primary key (either numeric ID if we can extract, or normalized username)
+  username: string; // @username
+  displayName: string;
+  avatarUrl?: string;
+  bio?: string;
+
+  followersCount?: number;
+  followingCount?: number;
+
+  isFollowing: boolean; // Does the user (me) follow this account?
+  isFollower: boolean;  // Does this account follow the user (me)?
+
+  firstSeenAt: number; // Timestamp when first detected
+  lastSeenAt: number;  // Timestamp when last scanned
+
+  followedAt?: number;
+  unfollowedAt?: number;
+
+  followerSince?: number;
+
+  mutualCount?: number;
+}
+
+export interface RelationshipSnapshot {
+  id: string;
+  userId: string;
+  timestamp: number;
+  isFollowing: boolean;
+  isFollower: boolean;
+}
+
+export interface RelationshipChange {
+  id: string;
+  userId: string;
+  type: "FOLLOWED_ME" | "UNFOLLOWED_ME" | "I_FOLLOWED" | "I_UNFOLLOWED";
+  timestamp: number;
+}
+
+export interface ScanSession {
+  id: string;
+  startedAt: number;
+  finishedAt?: number;
+  followersScanned: number;
+  followingScanned: number;
+  status: "pending" | "running" | "completed" | "failed";
+}
+
+export interface ConnectionStats {
+  userId: string;
+  mutualFollowingCount: number;
+  mutualFollowerCount: number;
+}
