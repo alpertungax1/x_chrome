@@ -19,6 +19,46 @@ function initContentScript() {
   const scanner = new XScanner();
   const actionHandler = new XActionHandler();
 
+  /** Tarama popup'ında canlı progress HUD (dashboard donmuş olsa bile görünür). */
+  function ensureScanOverlay(): HTMLElement {
+    let el = document.getElementById('xrm-scan-overlay');
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = 'xrm-scan-overlay';
+    el.style.cssText = [
+      'position:fixed',
+      'top:12px',
+      'left:50%',
+      'transform:translateX(-50%)',
+      'z-index:2147483647',
+      'padding:10px 18px',
+      'border-radius:999px',
+      'background:rgba(29,78,216,0.95)',
+      'color:#fff',
+      'font:600 13px/1.3 system-ui,sans-serif',
+      'box-shadow:0 4px 20px rgba(0,0,0,0.35)',
+      'pointer-events:none',
+      'max-width:90vw',
+      'white-space:nowrap',
+      'overflow:hidden',
+      'text-overflow:ellipsis',
+      'display:none',
+    ].join(';');
+    document.documentElement.appendChild(el);
+    return el;
+  }
+
+  function showScanOverlay(text: string) {
+    const el = ensureScanOverlay();
+    el.textContent = text;
+    el.style.display = 'block';
+  }
+
+  function hideScanOverlay() {
+    const el = document.getElementById('xrm-scan-overlay');
+    if (el) el.style.display = 'none';
+  }
+
   /**
    * Oturum açmış kullanıcının @username'ini bul.
    * ASLA /home, /explore gibi nav path'lerini kullanıcı adı sanma.
@@ -156,6 +196,7 @@ function initContentScript() {
 
     if (message.type === 'SCAN_STOP') {
       scanner.stopScan();
+      showScanOverlay('Tarama durduruluyor...');
       sendResponse({ status: 'stopping' });
       return false;
     }
@@ -167,6 +208,7 @@ function initContentScript() {
 
       // Hemen ACK — tarama bitene kadar bekletme
       sendResponse({ status: 'started', scanId });
+      showScanOverlay('Tarama başlıyor...');
 
       void scanner
         .startScan((progress) => {
@@ -178,6 +220,10 @@ function initContentScript() {
             updatedAt: Date.now(),
             pageUrl: location.href,
           };
+          const debug = progress.debug ? ` | ${progress.debug}` : '';
+          showScanOverlay(`Bulunan: ${progress.count}${debug}`);
+
+          // storage + mesaj: SW dashboard DOM'unu (donmuş olsa bile) günceller
           chrome.storage.local.set({
             scanProgress: payload,
             scanStatus: 'running',
@@ -193,6 +239,13 @@ function initContentScript() {
             completedAt: Date.now(),
             pageUrl: location.href,
           };
+          showScanOverlay(
+            stopped
+              ? `Durduruldu · ${users.length} kullanıcı`
+              : `Tamamlandı · ${users.length} kullanıcı`
+          );
+          window.setTimeout(() => hideScanOverlay(), 2500);
+
           chrome.storage.local.set({
             scanProgress: null,
             scanStatus: result.status,
@@ -210,6 +263,8 @@ function initContentScript() {
             error: err?.message || String(err),
             completedAt: Date.now(),
           };
+          showScanOverlay(`Hata: ${result.error}`);
+          window.setTimeout(() => hideScanOverlay(), 4000);
           chrome.storage.local.set({
             scanProgress: null,
             scanStatus: 'error',

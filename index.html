@@ -4,8 +4,32 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>X Relationship Manager</title>
+    <style>
+      /* React dışında — SW donmuş sekmeyi bile buraya yazabilir */
+      #xrm-scan-live {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 2147483647;
+        padding: 10px 16px;
+        font: 600 14px/1.4 system-ui, -apple-system, Segoe UI, sans-serif;
+        color: #fff;
+        background: linear-gradient(90deg, #1d4ed8, #2563eb);
+        box-shadow: 0 2px 12px rgba(0, 0, 0, 0.2);
+        pointer-events: none;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      body.xrm-scanning #root {
+        padding-top: 44px;
+      }
+    </style>
   </head>
   <body>
+    <div id="xrm-scan-live" aria-live="polite"></div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

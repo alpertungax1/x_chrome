@@ -49,8 +49,16 @@ const Dashboard: React.FC = () => {
     if (text === lastProgressTextRef.current) return;
     lastProgressTextRef.current = text;
     setScanStatus(text);
-    // Sekme başlığı da güncellenir — arka planda bile fark edilir
+    setIsScanning(true);
+    // Sekme başlığı
     document.title = `Tarama (${payload.foundUsersCount}) · X Manager`;
+    // Root-dışı canlı bar (SW de yazar; burada senkron tut)
+    const bar = document.getElementById('xrm-scan-live');
+    if (bar) {
+      bar.style.display = 'block';
+      bar.textContent = `Tarama sürüyor... ${text}`;
+      document.body.classList.add('xrm-scanning');
+    }
   }, []);
 
   /** Dashboard penceresini öne al — arka planda donmasın, progress canlı kalsın. */
@@ -145,16 +153,35 @@ const Dashboard: React.FC = () => {
     };
     const onFocus = () => flushProgressFromStorage();
 
+    // SW executeScript ile basılan CustomEvent — JS uyanıksa React state de güncellenir
+    const onLiveProgress = (ev: Event) => {
+      if (!scanSessionActiveRef.current) return;
+      const detail = (ev as CustomEvent).detail as { text?: string; count?: number | null };
+      if (!detail?.text) return;
+      // text: "Tarama sürüyor... Bulunan: N | ..."
+      const m = detail.text.match(/Bulunan:\s*(\d+)(.*)$/);
+      if (m) {
+        applyScanProgress({
+          foundUsersCount: Number(m[1]),
+          debug: m[2]?.replace(/^\s*\|\s*/, '') || undefined,
+        });
+      } else {
+        setScanStatus(detail.text.replace(/^Tarama sürüyor\.\.\.\s*/, ''));
+      }
+    };
+
     chrome.runtime.onMessage.addListener(messageListener);
     chrome.storage.onChanged.addListener(storageListener);
     document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('focus', onFocus);
+    window.addEventListener('xrm-scan-progress', onLiveProgress);
 
     return () => {
       chrome.runtime.onMessage.removeListener(messageListener);
       chrome.storage.onChanged.removeListener(storageListener);
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('focus', onFocus);
+      window.removeEventListener('xrm-scan-progress', onLiveProgress);
       try {
         port?.disconnect();
       } catch {
@@ -269,11 +296,11 @@ const Dashboard: React.FC = () => {
 
       setScanStatus(`Popup açılıyor (@${username})...`);
       const followingUrl = `https://x.com/${username}/following`;
-      // focused:false → dashboard odağı kaçmasın, UI donmasın
-      const { windowId, tabId } = await openScanPopup(followingUrl, false);
+      // focused:true — X sanal listesi arka planda yüklenmez; tarama ilerlemesi için gerekli.
+      // Dashboard progress'i SW executeScript ile donmuş sekmeye de yazılır (#xrm-scan-live).
+      const { windowId, tabId } = await openScanPopup(followingUrl, true);
       scanningWindowIdRef.current = windowId;
       scanningTabIdRef.current = tabId;
-      await focusDashboardWindow();
       throwIfAborted();
 
       setScanStatus('Following sayfası yükleniyor...');
@@ -283,7 +310,6 @@ const Dashboard: React.FC = () => {
       throwIfAborted();
       await ensureContentScript(tabId);
       throwIfAborted();
-      await focusDashboardWindow();
 
       // --- Following ---
       setScanStatus('Takip edilenler taranıyor...');
@@ -292,7 +318,12 @@ const Dashboard: React.FC = () => {
       activeScanIdRef.current = followingScanId;
       await chrome.storage.local.remove(['scanResult', 'scanProgress', 'scanStatus']);
       await startScanOnTab(tabId, followingScanId);
-      await focusDashboardWindow();
+      // Tarama penceresi odakta kalsın (scroll/DOM için); dashboard bar'ı SW günceller
+      try {
+        await chrome.windows.update(windowId, { focused: true });
+      } catch {
+        // ignore
+      }
       const followingResult = await waitForScanResult(
         followingScanId,
         15 * 60 * 1000,
@@ -323,13 +354,18 @@ const Dashboard: React.FC = () => {
       throwIfAborted();
       await ensureContentScript(tabId);
       throwIfAborted();
-      await focusDashboardWindow();
 
       const followersScanId = `followers_${Date.now()}`;
       activeScanIdRef.current = followersScanId;
       await chrome.storage.local.remove(['scanResult', 'scanProgress', 'scanStatus']);
       await startScanOnTab(tabId, followersScanId);
-      await focusDashboardWindow();
+      try {
+        if (scanningWindowIdRef.current != null) {
+          await chrome.windows.update(scanningWindowIdRef.current, { focused: true });
+        }
+      } catch {
+        // ignore
+      }
       const followersResult = await waitForScanResult(
         followersScanId,
         15 * 60 * 1000,
@@ -417,6 +453,15 @@ const Dashboard: React.FC = () => {
       scanningTabIdRef.current = null;
       setIsScanning(false);
       setScanStatus('');
+      lastProgressTextRef.current = '';
+      document.title = 'X Relationship Manager';
+      const bar = document.getElementById('xrm-scan-live');
+      if (bar) {
+        bar.style.display = 'none';
+        bar.textContent = '';
+      }
+      document.body.classList.remove('xrm-scanning');
+      void chrome.action.setBadgeText({ text: '' });
     }
   };
 
