@@ -1,7 +1,16 @@
 import { create } from 'zustand';
 import { XUser, ScanSession } from '../types/user';
-import { userRepository } from '../db/users.repository';
+import { userRepository, mergeScanUsers } from '../db/users.repository';
 import { relationshipAnalyzer } from '../analysis/relationship-analyzer';
+
+function computeStats(users: XUser[]) {
+  return {
+    followers: users.filter((u) => u.isFollower).length,
+    following: users.filter((u) => u.isFollowing).length,
+    notFollowing: relationshipAnalyzer.findNotFollowingMe(users).length,
+    mutuals: relationshipAnalyzer.findMutuals(users).length,
+  };
+}
 
 interface AppState {
   users: XUser[];
@@ -14,12 +23,19 @@ interface AppState {
   isLoading: boolean;
   currentSession: ScanSession | null;
   loadUsers: () => Promise<void>;
-  saveScannedUsers: (users: XUser[]) => Promise<void>;
+  /** Eski listeyi siler, following+followers birleşimini yazar. */
+  replaceWithScan: (
+    followingUsers: Partial<XUser>[],
+    followersUsers?: Partial<XUser>[]
+  ) => Promise<number>;
+  clearUsers: () => Promise<void>;
+  /** Takipten çıkınca listeden düş (takipçi değilse sil). */
+  applyUnfollow: (username: string) => Promise<void>;
   setLoading: (loading: boolean) => void;
   setCurrentSession: (session: ScanSession | null) => void;
 }
 
-export const useAppStore = create<AppState>((set) => ({
+export const useAppStore = create<AppState>((set, get) => ({
   users: [],
   stats: {
     followers: 0,
@@ -29,19 +45,14 @@ export const useAppStore = create<AppState>((set) => ({
   },
   isLoading: false,
   currentSession: null,
-  
+
   loadUsers: async () => {
     set({ isLoading: true });
     try {
       const users = await userRepository.getAll();
-      const notFollowing = relationshipAnalyzer.findNotFollowingMe(users).length;
-      const mutuals = relationshipAnalyzer.findMutuals(users).length;
-      const followers = users.filter(u => u.isFollower).length;
-      const following = users.filter(u => u.isFollowing).length;
-
       set({
         users,
-        stats: { followers, following, notFollowing, mutuals },
+        stats: computeStats(users),
         isLoading: false,
       });
     } catch (error) {
@@ -50,15 +61,44 @@ export const useAppStore = create<AppState>((set) => ({
     }
   },
 
-  saveScannedUsers: async (scannedUsers: XUser[]) => {
-    try {
-      if (scannedUsers && scannedUsers.length > 0) {
-        await userRepository.saveBatch(scannedUsers);
-        console.log(`Saved ${scannedUsers.length} users to IndexedDB`);
-      }
-    } catch (error) {
-      console.error('Failed to save scanned users:', error);
-    }
+  clearUsers: async () => {
+    await userRepository.clear();
+    set({
+      users: [],
+      stats: { followers: 0, following: 0, notFollowing: 0, mutuals: 0 },
+    });
+  },
+
+  replaceWithScan: async (followingUsers, followersUsers = []) => {
+    const merged = mergeScanUsers(followingUsers, followersUsers);
+    await userRepository.replaceAll(merged);
+    const users = await userRepository.getAll();
+    set({
+      users,
+      stats: computeStats(users),
+      isLoading: false,
+    });
+    console.log(`Replaced user list with ${users.length} users from scan`);
+    return users.length;
+  },
+
+  applyUnfollow: async (username: string) => {
+    await userRepository.applyUnfollow(username);
+    // UI'yi anında güncelle
+    const id = username.trim().replace(/^@/, '').toLowerCase();
+    const prev = get().users;
+    const next = prev
+      .map((u) =>
+        u.id === id || u.username.toLowerCase() === id
+          ? { ...u, isFollowing: false, unfollowedAt: Date.now() }
+          : u
+      )
+      .filter((u) => u.isFollowing || u.isFollower);
+
+    set({
+      users: next,
+      stats: computeStats(next),
+    });
   },
 
   setLoading: (loading) => set({ isLoading: loading }),

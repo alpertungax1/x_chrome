@@ -1,8 +1,6 @@
-import { userRepository } from '../db/users.repository';
-
 console.log('Background service worker initialized.');
 
-// Dashboard port'ları — progress canlı iletilir (sekme odakta olmasa bile SW uyanık kalır)
+// Dashboard port'ları — progress canlı iletilir
 const dashboardPorts = new Set<chrome.runtime.Port>();
 
 chrome.runtime.onConnect.addListener((port) => {
@@ -24,14 +22,12 @@ function broadcastToDashboards(message: object) {
 }
 
 /**
- * Content script tarama sonucunu hem runtime mesaj hem storage ile bildirir.
- * Dashboard donmuş/kapalı olsa bile sonuç IndexedDB'ye yazılsın.
+ * Liste yazma yetkisi Dashboard'da (replaceAll).
+ * SW sadece progress/badge ve mesaj iletimi yapar — eski merge kaydı yapmaz.
  */
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  // Progress: storage zaten yazıldı; port dinleyen dashboard'lara da bas
   if (message?.type === 'SCAN_PROGRESS') {
     broadcastToDashboards({ type: 'SCAN_PROGRESS', payload: message.payload });
-    // Badge ile de göster (sekme başlığına bakmadan)
     const n = message.payload?.foundUsersCount;
     if (typeof n === 'number') {
       void chrome.action.setBadgeText({ text: n > 999 ? '999+' : String(n) });
@@ -40,26 +36,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return false;
   }
 
-  if (message?.type === 'SCAN_COMPLETED' && message.payload?.users) {
-    const users = message.payload.users;
+  if (message?.type === 'SCAN_COMPLETED') {
     void chrome.action.setBadgeText({ text: '' });
     broadcastToDashboards({ type: 'SCAN_COMPLETED', payload: message.payload });
-    userRepository
-      .saveBatch(users)
-      .then(() => {
-        console.log(`Service worker: saved ${users.length} users`);
-        // Dashboard'un uyanınca fark etmesi için bayrak
-        return chrome.storage.local.set({
-          usersUpdatedAt: Date.now(),
-          lastSavedUserCount: users.length,
-        });
-      })
-      .then(() => sendResponse({ ok: true }))
-      .catch((err) => {
-        console.error('Service worker: failed to save users', err);
-        sendResponse({ ok: false, error: String(err) });
-      });
-    return true; // async response
+    sendResponse({ ok: true });
+    return false;
   }
 
   if (message?.type === 'SCAN_ERROR') {
@@ -69,30 +50,4 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   return false;
-});
-
-// Content script sadece storage yazdıysa (mesaj kaçtıysa) yine kaydet
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== 'local') return;
-
-  const result = changes.scanResult?.newValue;
-  if (!result || result.status !== 'completed' || !result.users?.length) return;
-
-  // Aynı sonucu tekrar kaydetmemek için timestamp kontrolü
-  const completedAt = result.completedAt as number | undefined;
-  chrome.storage.local.get(['lastProcessedScanAt'], async (data) => {
-    if (completedAt && data.lastProcessedScanAt === completedAt) return;
-
-    try {
-      await userRepository.saveBatch(result.users);
-      await chrome.storage.local.set({
-        lastProcessedScanAt: completedAt ?? Date.now(),
-        usersUpdatedAt: Date.now(),
-        lastSavedUserCount: result.users.length,
-      });
-      console.log(`Service worker (storage): saved ${result.users.length} users`);
-    } catch (err) {
-      console.error('Service worker (storage): failed to save users', err);
-    }
-  });
 });

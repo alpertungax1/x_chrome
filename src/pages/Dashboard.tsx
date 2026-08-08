@@ -241,9 +241,15 @@ const Dashboard: React.FC = () => {
       'activeScanId',
     ]);
 
-    let partialSaved = 0;
+    let followingUsers: any[] = [];
+    let followersUsers: any[] = [];
+    let listReplaced = false;
 
     try {
+      // Her tarama: eski listeyi sil, sıfırdan kur
+      setScanStatus('Eski liste temizleniyor...');
+      await useAppStore.getState().clearUsers();
+
       setScanStatus('X kullanıcı adı alınıyor...');
       const username = await resolveXUsername();
       throwIfAborted();
@@ -264,7 +270,6 @@ const Dashboard: React.FC = () => {
       setScanStatus(`Popup açılıyor (@${username})...`);
       const followingUrl = `https://x.com/${username}/following`;
       // focused:false → dashboard odağı kaçmasın, UI donmasın
-      // (sayfa yüklemesi yine olur; tarama arka planda devam eder)
       const { windowId, tabId } = await openScanPopup(followingUrl, false);
       scanningWindowIdRef.current = windowId;
       scanningTabIdRef.current = tabId;
@@ -296,12 +301,13 @@ const Dashboard: React.FC = () => {
       if (followingResult.status === 'error') {
         throw new Error(followingResult.error || 'Following taraması başarısız');
       }
-      const followingUsers = followingResult.users || [];
-      if (followingUsers.length > 0) {
-        await useAppStore.getState().saveScannedUsers(followingUsers);
-        partialSaved += followingUsers.length;
-      }
+      followingUsers = followingResult.users || [];
       if (followingResult.status === 'cancelled' || scanAbortRef.current) {
+        // Kısmi: sadece following ile listeyi yaz
+        if (followingUsers.length > 0) {
+          await useAppStore.getState().replaceWithScan(followingUsers, []);
+          listReplaced = true;
+        }
         throw new ScanAbortedError();
       }
 
@@ -332,19 +338,19 @@ const Dashboard: React.FC = () => {
       if (followersResult.status === 'error') {
         throw new Error(followersResult.error || 'Followers taraması başarısız');
       }
-      const followersUsers = followersResult.users || [];
-      if (followersUsers.length > 0) {
-        await useAppStore.getState().saveScannedUsers(followersUsers);
-        partialSaved += followersUsers.length;
-      }
+      followersUsers = followersResult.users || [];
       if (followersResult.status === 'cancelled' || scanAbortRef.current) {
+        await useAppStore.getState().replaceWithScan(followingUsers, followersUsers);
+        listReplaced = true;
         throw new ScanAbortedError();
       }
 
-      const totalFound = new Set([
-        ...followingUsers.map((u: any) => u.id || u.username),
-        ...followersUsers.map((u: any) => u.id || u.username),
-      ]).size;
+      // Tam tarama: eski liste yok, birleşik yeni liste
+      const totalFound = await useAppStore.getState().replaceWithScan(
+        followingUsers,
+        followersUsers
+      );
+      listReplaced = true;
 
       await chrome.storage.local.remove([
         'scanProgress',
@@ -354,9 +360,8 @@ const Dashboard: React.FC = () => {
       ]);
       closeScanningWindow();
       scanningTabIdRef.current = null;
-      await loadUsers();
       alert(
-        `Tarama tamamlandı!\n` +
+        `Tarama tamamlandı! Liste yenilendi.\n` +
           `Following: ${followingUsers.length}\n` +
           `Followers: ${followersUsers.length}\n` +
           `Toplam benzersiz: ${totalFound}`
@@ -371,14 +376,32 @@ const Dashboard: React.FC = () => {
         'scanResult',
         'activeScanId',
       ]);
-      await loadUsers();
+
+      // Abort dışı hata ve henüz yazılmadıysa kısmi sonuçları yine de kaydet
+      if (
+        !(error instanceof ScanAbortedError || error?.name === 'ScanAbortedError') &&
+        !listReplaced &&
+        (followingUsers.length > 0 || followersUsers.length > 0)
+      ) {
+        try {
+          await useAppStore.getState().replaceWithScan(followingUsers, followersUsers);
+          listReplaced = true;
+        } catch {
+          // ignore
+        }
+      }
+
+      if (!listReplaced) {
+        await loadUsers();
+      }
 
       if (error instanceof ScanAbortedError || error?.name === 'ScanAbortedError') {
+        const n = useAppStore.getState().users.length;
         alert(
           `Tarama durduruldu.\n` +
-            (partialSaved > 0
-              ? `Şu ana kadar bulunan kayıtlar kaydedildi (~${partialSaved}).`
-              : 'Kaydedilecek yeni kullanıcı bulunamadı.')
+            (n > 0
+              ? `Liste kısmen yenilendi (${n} kullanıcı).`
+              : 'Liste boş bırakıldı (yeterli veri yok).')
         );
       } else {
         alert(
@@ -467,7 +490,8 @@ const Dashboard: React.FC = () => {
     try {
       const success = await executeProfileAction(username, 'UNFOLLOW_FROM_PROFILE');
       if (success) {
-        await loadUsers(); // Listeyi güncelle
+        // Listeden düş: takip etmiyorsan sil; hâlâ takipçiyse sadece isFollowing=false
+        await useAppStore.getState().applyUnfollow(username);
       } else {
         alert(`${username} takipten çıkarılamadı. Lütfen manuel olarak deneyin.`);
       }
@@ -475,7 +499,7 @@ const Dashboard: React.FC = () => {
     } finally {
       setActionInProgress(null);
     }
-  }, [executeProfileAction, loadUsers]);
+  }, [executeProfileAction]);
 
   const handleFollow = useCallback(async (username: string): Promise<boolean> => {
     setActionInProgress(username);
@@ -506,7 +530,10 @@ const Dashboard: React.FC = () => {
       setBulkProgress({ current: i + 1, total: usernames.length });
 
       const success = await executeProfileAction(username, 'UNFOLLOW_FROM_PROFILE');
-      if (success) successCount++;
+      if (success) {
+        successCount++;
+        await useAppStore.getState().applyUnfollow(username);
+      }
 
       // Rate limiting: Her işlem arasında 3 saniye bekle (X'in spam korumasına takılmamak için)
       if (i < usernames.length - 1) {
@@ -516,9 +543,8 @@ const Dashboard: React.FC = () => {
 
     setActionInProgress(null);
     setBulkProgress(null);
-    await loadUsers();
     alert(`Toplu işlem tamamlandı!\n${successCount}/${usernames.length} kullanıcı başarıyla takipten çıkarıldı.`);
-  }, [executeProfileAction, loadUsers]);
+  }, [executeProfileAction]);
 
   const handleBulkFollow = useCallback(async (usernames: string[]) => {
     setBulkProgress({ current: 0, total: usernames.length });
