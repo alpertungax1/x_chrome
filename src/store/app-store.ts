@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { XUser, ScanSession } from '../types/user';
 import { userRepository } from '../db/users.repository';
 import { relationshipAnalyzer } from '../analysis/relationship-analyzer';
+import { Language } from '../i18n';
 
 function computeStats(users: XUser[]) {
   return {
@@ -22,6 +23,8 @@ interface AppState {
   };
   isLoading: boolean;
   currentSession: ScanSession | null;
+  language: Language;
+  setLanguage: (lang: Language) => void;
   loadUsers: () => Promise<void>;
   /**
    * Tarama sonucunu mevcut DB ile birleştirir (silmez).
@@ -54,6 +57,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   isLoading: false,
   currentSession: null,
+  language: 'tr' as Language,
+
+  setLanguage: (lang: Language) => {
+    set({ language: lang });
+    try {
+      void chrome.storage.sync.set({ language: lang });
+    } catch {
+      // ignore
+    }
+  },
 
   loadUsers: async () => {
     set({ isLoading: true });
@@ -131,3 +144,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   setLoading: (loading) => set({ isLoading: loading }),
   setCurrentSession: (session) => set({ currentSession: session }),
 }));
+
+// Kayıtlı dil tercihini chrome.storage.sync'ten async yükle (store oluşturulduktan sonra)
+try {
+  void chrome.storage.sync.get('language').then((data: Record<string, unknown>) => {
+    if (data.language === 'en' || data.language === 'tr') {
+      useAppStore.setState({ language: data.language as Language });
+    }
+  });
+} catch {
+  // chrome API mevcut değil (test ortamı)
+}

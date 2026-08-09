@@ -1,12 +1,14 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { XUser } from '../types/user';
 import { UserMinus, UserPlus, CheckSquare, Square, MinusSquare, Search, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
+import { translations, Language } from '../i18n';
 
 const PAGE_SIZE = 50;
 
 interface UserTableProps {
   users: XUser[];
   title: string;
+  lang?: Language;
   onUnfollow?: (username: string) => Promise<boolean>;
   onFollow?: (username: string) => Promise<boolean>;
   onBulkUnfollow?: (usernames: string[]) => Promise<void>;
@@ -26,6 +28,7 @@ function formatCount(n: number | undefined): string {
 export const UserTable: React.FC<UserTableProps> = ({ 
   users, 
   title, 
+  lang = 'tr',
   onUnfollow, 
   onFollow,
   onBulkUnfollow,
@@ -33,6 +36,7 @@ export const UserTable: React.FC<UserTableProps> = ({
   actionInProgress,
   bulkProgress
 }) => {
+  const t = translations[lang].table;
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
@@ -165,7 +169,7 @@ export const UserTable: React.FC<UserTableProps> = ({
 
   const handleBulkUnfollow = () => {
     if (onBulkUnfollow && selectedFollowing.length > 0) {
-      const confirmed = confirm(`${selectedFollowing.length} kişiyi takipten çıkarmak istediğinize emin misiniz?`);
+      const confirmed = confirm(`${selectedFollowing.length} ${lang === 'tr' ? 'kişiyi takipten çıkarmak istediğinize emin misiniz?' : 'users will be unfollowed. Are you sure?'}`);
       if (confirmed) {
         onBulkUnfollow(selectedFollowing.map(u => u.username));
         setSelectedIds(new Set());
@@ -175,7 +179,7 @@ export const UserTable: React.FC<UserTableProps> = ({
 
   const handleBulkFollow = () => {
     if (onBulkFollow && selectedNotFollowing.length > 0) {
-      const confirmed = confirm(`${selectedNotFollowing.length} kişiyi takip etmek istediğinize emin misiniz?`);
+      const confirmed = confirm(`${selectedNotFollowing.length} ${lang === 'tr' ? 'kişiyi takip etmek istediğinize emin misiniz?' : 'users will be followed. Are you sure?'}`);
       if (confirmed) {
         onBulkFollow(selectedNotFollowing.map(u => u.username));
         setSelectedIds(new Set());
@@ -191,14 +195,14 @@ export const UserTable: React.FC<UserTableProps> = ({
           <h3 className="text-lg font-bold text-gray-900">{title}</h3>
           <span className="bg-gray-100 text-gray-700 text-sm font-medium px-3 py-1 rounded-full">
             {filteredUsers.length}
-            {filteredUsers.length !== users.length ? ` / ${users.length}` : ''} Kullanıcı
+            {filteredUsers.length !== users.length ? ` / ${users.length}` : ''} {t.userCount}
           </span>
         </div>
         <div className="relative mb-3">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
           <input
             type="text"
-            placeholder="Kullanıcı ara..."
+            placeholder={t.searchPlaceholder}
             value={searchQuery}
             onChange={handleSearchChange}
             className="w-full pl-9 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
@@ -207,7 +211,7 @@ export const UserTable: React.FC<UserTableProps> = ({
 
         {/* Hızlı filtre: N kişiden az takipçi */}
         <div className="flex flex-wrap items-center gap-2 mb-3">
-          <span className="text-xs font-medium text-gray-500 mr-0.5">Hızlı:</span>
+          <span className="text-xs font-medium text-gray-500 mr-0.5">{t.quick}</span>
           {([50, 100, 500, 1000, 5000] as const).map((n) => {
             const active = maxFollowers === n && minFollowers == null;
             return (
@@ -229,7 +233,7 @@ export const UserTable: React.FC<UserTableProps> = ({
                     ? 'bg-blue-600 text-white border-blue-600'
                     : 'bg-white text-gray-700 border-gray-200 hover:border-blue-300 hover:bg-blue-50'
                 }`}
-                title={`${n} kişiden az takipçisi olanlar`}
+                title={t.lessThanN(n)}
               >
                 &lt;{n}
               </button>
@@ -240,7 +244,7 @@ export const UserTable: React.FC<UserTableProps> = ({
         {/* Takipçi sayısı filtresi */}
         <div className="flex flex-wrap items-end gap-3">
           <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-gray-500">Min. takipçi</span>
+            <span className="text-xs font-medium text-gray-500">{t.minFollowers}</span>
             <input
               type="number"
               min={0}
@@ -253,7 +257,7 @@ export const UserTable: React.FC<UserTableProps> = ({
           </label>
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-gray-500">
-              Maks. takipçi (bundan az)
+              {t.maxFollowers}
             </span>
             <input
               type="number"
@@ -273,7 +277,7 @@ export const UserTable: React.FC<UserTableProps> = ({
                 onChange={(e) => setHideUnknownCounts(e.target.checked)}
                 className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
               />
-              Sayısı bilinmeyenleri gizle
+              {t.hideUnknown}
             </label>
           )}
           {(maxFollowers != null || minFollowers != null || maxFollowersInput || minFollowersInput) && (
@@ -285,7 +289,7 @@ export const UserTable: React.FC<UserTableProps> = ({
               }}
               className="pb-2 text-xs font-medium text-blue-600 hover:text-blue-800"
             >
-              Filtreyi temizle
+              {t.clearFilter}
             </button>
           )}
           {filteredUsers.length > 0 && !allFilteredSelected && (
@@ -294,7 +298,7 @@ export const UserTable: React.FC<UserTableProps> = ({
               onClick={selectAllFiltered}
               className="pb-2 text-xs font-medium text-gray-700 hover:text-gray-900 underline-offset-2 hover:underline"
             >
-              Filtrelenenlerin tümünü seç ({filteredUsers.length})
+              {t.selectAllFiltered} ({filteredUsers.length})
             </button>
           )}
           {allFilteredSelected && filteredUsers.length > 0 && (
@@ -303,18 +307,18 @@ export const UserTable: React.FC<UserTableProps> = ({
               onClick={clearSelection}
               className="pb-2 text-xs font-medium text-gray-700 hover:text-gray-900"
             >
-              Seçimi kaldır
+              {t.clearSelection}
             </button>
           )}
         </div>
         <p className="mt-2 text-xs text-gray-400">
-          Takipçi sayısı tarama sırasında GraphQL’den alınır.
+          {t.scanNote}
           {countStats.total > 0 && (
             <>
               {' '}
-              Bu listede {countStats.known}/{countStats.total} kişide sayı var
+              {t.scanNoteCount(countStats.known, countStats.total)}
               {countStats.known === 0
-                ? ' — filtre için yeniden Scan Now çalıştır.'
+                ? t.scanNoteRescan
                 : '.'}
             </>
           )}
@@ -325,7 +329,7 @@ export const UserTable: React.FC<UserTableProps> = ({
       {selectedIds.size > 0 && (
         <div className="px-6 py-3 bg-blue-50 border-b border-blue-100 flex items-center justify-between">
           <span className="text-sm font-medium text-blue-800">
-            {selectedIds.size} kullanıcı seçildi
+            {t.selectedCount(selectedIds.size)}
           </span>
           <div className="flex gap-2">
             {selectedFollowing.length > 0 && onBulkUnfollow && (
@@ -335,7 +339,7 @@ export const UserTable: React.FC<UserTableProps> = ({
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 text-white text-xs font-medium rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <UserMinus size={14} />
-                Takipten Çık ({selectedFollowing.length})
+                {t.unfollow} ({selectedFollowing.length})
               </button>
             )}
             {selectedNotFollowing.length > 0 && onBulkFollow && (
@@ -345,14 +349,14 @@ export const UserTable: React.FC<UserTableProps> = ({
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <UserPlus size={14} />
-                Takip Et ({selectedNotFollowing.length})
+                {t.follow} ({selectedNotFollowing.length})
               </button>
             )}
             <button
               onClick={() => setSelectedIds(new Set())}
               className="px-3 py-1.5 bg-white text-gray-600 text-xs font-medium rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors"
             >
-              Seçimi Kaldır
+              {t.clearSelection}
             </button>
           </div>
         </div>
@@ -364,7 +368,7 @@ export const UserTable: React.FC<UserTableProps> = ({
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2 text-sm font-medium text-amber-800">
               <Loader2 size={14} className="animate-spin" />
-              İşlem devam ediyor... {bulkProgress.current}/{bulkProgress.total}
+              {t.processing} {bulkProgress.current}/{bulkProgress.total}
             </div>
           </div>
           <div className="w-full bg-amber-200 rounded-full h-1.5">
@@ -388,10 +392,10 @@ export const UserTable: React.FC<UserTableProps> = ({
                    <Square size={18} />}
                 </button>
               </th>
-              <th className="px-4 py-4">Kullanıcı</th>
-              <th className="px-4 py-4 whitespace-nowrap">Takipçi</th>
-              <th className="px-4 py-4">Durum</th>
-              <th className="px-4 py-4 text-right">İşlem</th>
+              <th className="px-4 py-4">{t.colUser}</th>
+              <th className="px-4 py-4 whitespace-nowrap">{t.colFollowers}</th>
+              <th className="px-4 py-4">{t.colStatus}</th>
+              <th className="px-4 py-4 text-right">{t.colAction}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
@@ -399,8 +403,8 @@ export const UserTable: React.FC<UserTableProps> = ({
               <tr>
                 <td colSpan={5} className="px-6 py-8 text-center text-gray-500">
                   {searchQuery || maxFollowers != null || minFollowers != null
-                    ? 'Filtreyle eşleşen kullanıcı yok.'
-                    : 'Bu listede gösterilecek kimse yok.'}
+                    ? t.noMatch
+                    : t.noUsers}
                 </td>
               </tr>
             ) : (
@@ -453,12 +457,12 @@ export const UserTable: React.FC<UserTableProps> = ({
                       <div className="flex flex-wrap gap-1.5">
                         {user.isFollowing && (
                           <span className="bg-green-50 text-green-700 text-xs px-2 py-0.5 rounded font-medium border border-green-100">
-                            Takip Ediyorsun
+                            {t.statusFollowing}
                           </span>
                         )}
                         {user.isFollower && (
                           <span className="bg-blue-50 text-blue-700 text-xs px-2 py-0.5 rounded font-medium border border-blue-100">
-                            Seni Takip Ediyor
+                            {t.statusFollower}
                           </span>
                         )}
                       </div>
@@ -472,7 +476,7 @@ export const UserTable: React.FC<UserTableProps> = ({
                             <button
                               onClick={() => onUnfollow(user.username)}
                               disabled={!!actionInProgress}
-                              title="Takipten Çık"
+                              title={t.titleUnfollow}
                               className="p-1.5 text-red-500 hover:bg-red-50 rounded-md transition-colors disabled:opacity-30"
                             >
                               <UserMinus size={16} />
@@ -482,7 +486,7 @@ export const UserTable: React.FC<UserTableProps> = ({
                             <button
                               onClick={() => onFollow(user.username)}
                               disabled={!!actionInProgress}
-                              title="Takip Et"
+                              title={t.titleFollow}
                               className="p-1.5 text-blue-500 hover:bg-blue-50 rounded-md transition-colors disabled:opacity-30"
                             >
                               <UserPlus size={16} />

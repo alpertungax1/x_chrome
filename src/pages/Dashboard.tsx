@@ -2,8 +2,10 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useAppStore } from '../store/app-store';
 import { StatsCard } from '../components/StatsCard';
 import { UserTable } from '../components/UserTable';
+import { XUser } from '../types/user';
 import { relationshipAnalyzer } from '../analysis/relationship-analyzer';
-import { Users, UserMinus, UserCheck, Activity, Square } from 'lucide-react';
+import { Users, UserMinus, UserCheck, Activity, Square, Globe } from 'lucide-react';
+import { translations } from '../i18n';
 
 type ViewMode = 'dashboard' | 'followers' | 'following' | 'notFollowingMe' | 'mutuals';
 
@@ -15,7 +17,10 @@ class ScanAbortedError extends Error {
 }
 
 const Dashboard: React.FC = () => {
-  const { users, stats, loadUsers, isLoading } = useAppStore();
+  const { users, stats, loadUsers, isLoading, language, setLanguage } = useAppStore();
+  const t = translations[language as keyof typeof translations];
+  const languageRef = React.useRef(language);
+  languageRef.current = language;
   const [isScanning, setIsScanning] = useState(false);
   const [scanStatus, setScanStatus] = useState('');
   const [currentView, setCurrentView] = useState<ViewMode>('dashboard');
@@ -45,18 +50,18 @@ const Dashboard: React.FC = () => {
       return;
     }
     const debug = payload.debug ? ` | ${payload.debug}` : '';
-    const text = `Bulunan: ${payload.foundUsersCount}${debug}`;
+    const text = `${languageRef.current === 'tr' ? 'Bulunan' : 'Found'}: ${payload.foundUsersCount}${debug}`;
     if (text === lastProgressTextRef.current) return;
     lastProgressTextRef.current = text;
     setScanStatus(text);
     setIsScanning(true);
     // Sekme başlığı
-    document.title = `Tarama (${payload.foundUsersCount}) · X Manager`;
+    document.title = `${languageRef.current === 'tr' ? 'Tarama' : 'Scanning'} (${payload.foundUsersCount}) · X Manager`;
     // Root-dışı canlı bar (SW de yazar; burada senkron tut)
     const bar = document.getElementById('xrm-scan-live');
     if (bar) {
       bar.style.display = 'block';
-      bar.textContent = `Tarama sürüyor... ${text}`;
+      bar.textContent = `${languageRef.current === 'tr' ? 'Tarama sürüyor...' : 'Scanning...'} ${text}`;
       document.body.classList.add('xrm-scanning');
     }
   }, []);
@@ -131,7 +136,7 @@ const Dashboard: React.FC = () => {
           if (message?.type === 'SCAN_COMPLETED') {
             const n = message.payload?.userCount ?? message.payload?.users?.length;
             if (n != null) {
-              setScanStatus(`Faz tamamlandı (${n} kullanıcı) — devam ediliyor…`);
+              setScanStatus(t.scan.phaseComplete(n));
             }
           }
         });
@@ -202,7 +207,7 @@ const Dashboard: React.FC = () => {
   // (dashboard odaktayken canlı; arka planda da throttle'a rağmen toparlar)
   useEffect(() => {
     if (!isScanning) {
-      if (document.title.startsWith('Tarama')) {
+      if (document.title.startsWith('Tarama') || document.title.startsWith('Scanning')) {
         document.title = 'X Relationship Manager';
       }
       return;
@@ -224,7 +229,7 @@ const Dashboard: React.FC = () => {
   const handleStopScan = useCallback(async () => {
     if (!scanSessionActiveRef.current) return;
     scanAbortRef.current = true;
-    setScanStatus('Durduruluyor...');
+    setScanStatus(t.scan.stopping);
 
     const tabId = scanningTabIdRef.current;
     const scanId = activeScanIdRef.current;
@@ -267,7 +272,7 @@ const Dashboard: React.FC = () => {
     scanSessionActiveRef.current = true;
     scanAbortRef.current = false;
     setIsScanning(true);
-    setScanStatus('Başlatılıyor...');
+    setScanStatus(t.scan.starting);
 
     await chrome.storage.local.remove([
       'scanResult',
@@ -441,8 +446,8 @@ const Dashboard: React.FC = () => {
         `Tarama tamamlandı! Liste birleştirildi (eski veri silinmedi).\n` +
           `Following: ${followingUsers.length}\n` +
           `Followers: ${followersUsers.length}\n` +
-          `Yeni: ${lastMerge.added} · Güncellenen: ${lastMerge.updated}\n` +
-          `Toplam kayıt: ${lastMerge.total}`
+          (lastMerge ? `Yeni: ${lastMerge.added} · Güncellenen: ${lastMerge.updated}\n` +
+          `Toplam kayıt: ${lastMerge.total}` : '')
       );
     } catch (error: any) {
       console.error('Scan failed:', error);
@@ -682,10 +687,10 @@ const Dashboard: React.FC = () => {
     if (currentView === 'dashboard') {
       return (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          <StatsCard title="Followers" value={stats.followers} icon={<Users size={22} />} />
-          <StatsCard title="Following" value={stats.following} icon={<Users size={22} />} />
-          <StatsCard title="Not Following You" value={stats.notFollowing} icon={<UserMinus size={22} />} />
-          <StatsCard title="Mutuals" value={stats.mutuals} icon={<UserCheck size={22} />} />
+          <StatsCard title={t.stats.followers} value={stats.followers} icon={<Users size={22} />} />
+          <StatsCard title={t.stats.following} value={stats.following} icon={<Users size={22} />} />
+          <StatsCard title={t.stats.notFollowing} value={stats.notFollowing} icon={<UserMinus size={22} />} />
+          <StatsCard title={t.stats.mutuals} value={stats.mutuals} icon={<UserCheck size={22} />} />
         </div>
       );
     }
@@ -700,19 +705,19 @@ const Dashboard: React.FC = () => {
     };
 
     if (currentView === 'followers') {
-      return <UserTable users={users.filter(u => u.isFollower)} title="Takipçilerim" {...tableProps} />;
+      return <UserTable users={users.filter((u: XUser) => u.isFollower)} title={t.nav.followers} lang={language} {...tableProps} />;
     }
     
     if (currentView === 'following') {
-      return <UserTable users={users.filter(u => u.isFollowing)} title="Takip Ettiklerim" {...tableProps} />;
+      return <UserTable users={users.filter((u: XUser) => u.isFollowing)} title={t.nav.following} lang={language} {...tableProps} />;
     }
 
     if (currentView === 'notFollowingMe') {
-      return <UserTable users={relationshipAnalyzer.findNotFollowingMe(users)} title="Geri Takip Etmeyenler" {...tableProps} />;
+      return <UserTable users={relationshipAnalyzer.findNotFollowingMe(users)} title={t.nav.notFollowingMe} lang={language} {...tableProps} />;
     }
 
     if (currentView === 'mutuals') {
-      return <UserTable users={relationshipAnalyzer.findMutuals(users)} title="Karşılıklı Takipleşilenler" {...tableProps} />;
+      return <UserTable users={relationshipAnalyzer.findMutuals(users)} title={t.nav.mutuals} lang={language} {...tableProps} />;
     }
   };
 
@@ -726,29 +731,59 @@ const Dashboard: React.FC = () => {
     <div className="flex h-screen bg-gray-50 text-gray-900">
       {/* Sidebar */}
       <div className="w-64 bg-white border-r border-gray-200 p-4 flex flex-col">
-        <h2 className="text-xl font-bold text-gray-800 mb-8 pl-2">X Manager</h2>
+        <h2 className="text-xl font-bold text-gray-800 mb-8 pl-2">{t.appName}</h2>
         <nav className="space-y-2 flex-1">
           <div onClick={() => setCurrentView('dashboard')} className={navItemClass('dashboard')}>
             <Activity size={20} />
-            <span>Dashboard</span>
+            <span>{t.nav.dashboard}</span>
           </div>
           <div onClick={() => setCurrentView('followers')} className={navItemClass('followers')}>
             <Users size={20} />
-            <span>Followers</span>
+            <span>{t.nav.followers}</span>
           </div>
           <div onClick={() => setCurrentView('following')} className={navItemClass('following')}>
             <Users size={20} />
-            <span>Following</span>
+            <span>{t.nav.following}</span>
           </div>
           <div onClick={() => setCurrentView('notFollowingMe')} className={navItemClass('notFollowingMe')}>
             <UserMinus size={20} />
-            <span>Not Following Me</span>
+            <span>{t.nav.notFollowingMe}</span>
           </div>
           <div onClick={() => setCurrentView('mutuals')} className={navItemClass('mutuals')}>
             <UserCheck size={20} />
-            <span>Mutuals</span>
+            <span>{t.nav.mutuals}</span>
           </div>
         </nav>
+
+        {/* Dil Seçici */}
+        <div className="mt-4 pt-4 border-t border-gray-100">
+          <p className="text-xs font-medium text-gray-400 mb-2 pl-1 flex items-center gap-1">
+            <Globe size={12} />
+            {t.language}
+          </p>
+          <div className="flex rounded-lg overflow-hidden border border-gray-200">
+            <button
+              onClick={() => setLanguage('tr')}
+              className={`flex-1 py-1.5 text-xs font-semibold transition-colors ${
+                language === 'tr'
+                  ? 'bg-gray-900 text-white'
+                  : 'bg-white text-gray-500 hover:bg-gray-50'
+              }`}
+            >
+              TR
+            </button>
+            <button
+              onClick={() => setLanguage('en')}
+              className={`flex-1 py-1.5 text-xs font-semibold transition-colors ${
+                language === 'en'
+                  ? 'bg-gray-900 text-white'
+                  : 'bg-white text-gray-500 hover:bg-gray-50'
+              }`}
+            >
+              EN
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* Main Content */}
@@ -756,10 +791,10 @@ const Dashboard: React.FC = () => {
         <div className="flex justify-between items-center mb-8">
           <div>
             <h1 className="text-2xl font-bold text-gray-900 capitalize">
-              {currentView === 'notFollowingMe' ? 'Not Following You' : currentView}
+              {t.pageTitle[currentView]}
             </h1>
             <p className="text-gray-500 mt-1">
-              {isScanning ? <span className="text-blue-600 font-medium">Tarama sürüyor... {scanStatus}</span> : 'Welcome back. Here is your account overview.'}
+              {isScanning ? <span className="text-blue-600 font-medium">{t.scanningText} {scanStatus}</span> : t.welcomeText}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -770,7 +805,7 @@ const Dashboard: React.FC = () => {
                 className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium transition-colors shadow-sm bg-red-600 text-white hover:bg-red-700"
               >
                 <Square size={16} fill="currentColor" />
-                Durdur
+                {t.stop}
               </button>
             )}
             <button
@@ -783,7 +818,7 @@ const Dashboard: React.FC = () => {
                   : 'bg-gray-900 text-white hover:bg-gray-800'
               }`}
             >
-              {isScanning ? 'Tarama Yapılıyor...' : 'Scan Now'}
+              {isScanning ? t.scanning : t.scanNow}
             </button>
           </div>
         </div>
