@@ -23,7 +23,16 @@ interface AppState {
   isLoading: boolean;
   currentSession: ScanSession | null;
   loadUsers: () => Promise<void>;
-  /** Eski listeyi siler, following+followers birleşimini yazar. */
+  /**
+   * Tarama sonucunu mevcut DB ile birleştirir (silmez).
+   * Yeni ekler, güncellemeleri yazar; tam taranan listelerde kaybolan bayrakları düşürür.
+   */
+  mergeWithScan: (
+    followingUsers: Partial<XUser>[],
+    followersUsers?: Partial<XUser>[],
+    opts?: { followingComplete?: boolean; followersComplete?: boolean }
+  ) => Promise<{ total: number; added: number; updated: number }>;
+  /** @deprecated Tarama artık silmez; manuel temizlik için tutulur. */
   replaceWithScan: (
     followingUsers: Partial<XUser>[],
     followersUsers?: Partial<XUser>[]
@@ -69,17 +78,35 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
   },
 
-  replaceWithScan: async (followingUsers, followersUsers = []) => {
-    const merged = mergeScanUsers(followingUsers, followersUsers);
-    await userRepository.replaceAll(merged);
+  mergeWithScan: async (
+    followingUsers,
+    followersUsers = [],
+    opts = {}
+  ) => {
+    const result = await userRepository.mergeScan(
+      followingUsers,
+      followersUsers,
+      opts
+    );
     const users = await userRepository.getAll();
     set({
       users,
       stats: computeStats(users),
       isLoading: false,
     });
-    console.log(`Replaced user list with ${users.length} users from scan`);
-    return users.length;
+    console.log(
+      `Merged scan: +${result.added} new, ~${result.updated} updated, total ${result.total}`
+    );
+    return result;
+  },
+
+  replaceWithScan: async (followingUsers, followersUsers = []) => {
+    // Geriye uyumluluk: artık replace değil merge (tam liste varsayımı)
+    const result = await get().mergeWithScan(followingUsers, followersUsers, {
+      followingComplete: true,
+      followersComplete: followersUsers.length > 0,
+    });
+    return result.total;
   },
 
   applyUnfollow: async (username: string) => {

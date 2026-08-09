@@ -279,13 +279,13 @@ const Dashboard: React.FC = () => {
 
     let followingUsers: any[] = [];
     let followersUsers: any[] = [];
-    let listReplaced = false;
+    let listMerged = false;
+    let followingComplete = false;
+    let followersComplete = false;
+    let lastMerge: { total: number; added: number; updated: number } | null = null;
 
     try {
-      // Her tarama: eski listeyi sil, sıfırdan kur
-      setScanStatus('Eski liste temizleniyor...');
-      await useAppStore.getState().clearUsers();
-
+      // Eski DB silinmez — tarama sonunda merge edilir
       setScanStatus('X kullanıcı adı alınıyor...');
       const username = await resolveXUsername();
       throwIfAborted();
@@ -348,11 +348,15 @@ const Dashboard: React.FC = () => {
         throw new Error(followingResult.error || 'Following taraması başarısız');
       }
       followingUsers = followingResult.users || [];
+      followingComplete = followingResult.status === 'completed';
       if (followingResult.status === 'cancelled' || scanAbortRef.current) {
-        // Kısmi: sadece following ile listeyi yaz
+        // Kısmi: bulunanları ekle/güncelle, eksik bayrakları düşürme
         if (followingUsers.length > 0) {
-          await useAppStore.getState().replaceWithScan(followingUsers, []);
-          listReplaced = true;
+          lastMerge = await useAppStore.getState().mergeWithScan(followingUsers, [], {
+            followingComplete: false,
+            followersComplete: false,
+          });
+          listMerged = true;
         }
         throw new ScanAbortedError();
       }
@@ -397,18 +401,32 @@ const Dashboard: React.FC = () => {
         throw new Error(followersResult.error || 'Followers taraması başarısız');
       }
       followersUsers = followersResult.users || [];
+      followersComplete = followersResult.status === 'completed';
       if (followersResult.status === 'cancelled' || scanAbortRef.current) {
-        await useAppStore.getState().replaceWithScan(followingUsers, followersUsers);
-        listReplaced = true;
+        // Following tamam, followers kısmi
+        lastMerge = await useAppStore.getState().mergeWithScan(
+          followingUsers,
+          followersUsers,
+          {
+            followingComplete: true,
+            followersComplete: false,
+          }
+        );
+        listMerged = true;
         throw new ScanAbortedError();
       }
 
-      // Tam tarama: eski liste yok, birleşik yeni liste
-      const totalFound = await useAppStore.getState().replaceWithScan(
+      // Tam tarama: silmeden birleştir + kaybolan bayrakları güncelle
+      setScanStatus('Veritabanı güncelleniyor...');
+      lastMerge = await useAppStore.getState().mergeWithScan(
         followingUsers,
-        followersUsers
+        followersUsers,
+        {
+          followingComplete: true,
+          followersComplete: true,
+        }
       );
-      listReplaced = true;
+      listMerged = true;
 
       await chrome.storage.local.remove([
         'scanProgress',
@@ -420,10 +438,11 @@ const Dashboard: React.FC = () => {
       closeScanningWindow();
       scanningTabIdRef.current = null;
       alert(
-        `Tarama tamamlandı! Liste yenilendi.\n` +
+        `Tarama tamamlandı! Liste birleştirildi (eski veri silinmedi).\n` +
           `Following: ${followingUsers.length}\n` +
           `Followers: ${followersUsers.length}\n` +
-          `Toplam benzersiz: ${totalFound}`
+          `Yeni: ${lastMerge.added} · Güncellenen: ${lastMerge.updated}\n` +
+          `Toplam kayıt: ${lastMerge.total}`
       );
     } catch (error: any) {
       console.error('Scan failed:', error);
@@ -437,21 +456,28 @@ const Dashboard: React.FC = () => {
         'activeScanId',
       ]);
 
-      // Abort dışı hata ve henüz yazılmadıysa kısmi sonuçları yine de kaydet
+      // Abort dışı hata ve henüz yazılmadıysa kısmi sonuçları merge et
       if (
         !(error instanceof ScanAbortedError || error?.name === 'ScanAbortedError') &&
-        !listReplaced &&
+        !listMerged &&
         (followingUsers.length > 0 || followersUsers.length > 0)
       ) {
         try {
-          await useAppStore.getState().replaceWithScan(followingUsers, followersUsers);
-          listReplaced = true;
+          lastMerge = await useAppStore.getState().mergeWithScan(
+            followingUsers,
+            followersUsers,
+            {
+              followingComplete,
+              followersComplete,
+            }
+          );
+          listMerged = true;
         } catch {
           // ignore
         }
       }
 
-      if (!listReplaced) {
+      if (!listMerged) {
         await loadUsers();
       }
 
@@ -459,9 +485,11 @@ const Dashboard: React.FC = () => {
         const n = useAppStore.getState().users.length;
         alert(
           `Tarama durduruldu.\n` +
-            (n > 0
-              ? `Liste kısmen yenilendi (${n} kullanıcı).`
-              : 'Liste boş bırakıldı (yeterli veri yok).')
+            (lastMerge
+              ? `Birleştirildi: +${lastMerge.added} yeni, ~${lastMerge.updated} güncelleme (toplam ${lastMerge.total}).`
+              : n > 0
+                ? `Mevcut liste korundu (${n} kullanıcı).`
+                : 'Yeni veri yok; mevcut liste korundu.')
         );
       } else {
         alert(

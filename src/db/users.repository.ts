@@ -53,7 +53,7 @@ export const userRepository = {
 
   /**
    * Listeyi tamamen siler ve verilen kullanıcılarla yeniden oluşturur.
-   * Her tam tarama sonunda kullanılmalı.
+   * Manuel temizlik / nadir senaryolar için; tarama bunu kullanmaz.
    */
   async replaceAll(users: Partial<XUser>[]): Promise<void> {
     const db = await getDB();
@@ -77,6 +77,144 @@ export const userRepository = {
     }
 
     await tx.done;
+  },
+
+  /**
+   * Tarama sonucunu mevcut DB ile birleştir.
+   * - Eski kayıtları silmez
+   * - Yeni kullanıcı ekler
+   * - Güncellenebilir alanları (isim, sayılar, bayraklar) yazar
+   * - followingComplete: following listesinde görünmeyenlerin isFollowing=false
+   * - followersComplete: followers listesinde görünmeyenlerin isFollower=false
+   */
+  async mergeScan(
+    followingUsers: Partial<XUser>[],
+    followersUsers: Partial<XUser>[] = [],
+    opts: { followingComplete?: boolean; followersComplete?: boolean } = {}
+  ): Promise<{ total: number; added: number; updated: number }> {
+    const followingComplete = Boolean(opts.followingComplete);
+    const followersComplete = Boolean(opts.followersComplete);
+
+    const scanned = mergeScanUsers(followingUsers, followersUsers);
+    const followingIds = new Set(
+      followingUsers
+        .map((u) => normalizeId((u.id || u.username || '') as string))
+        .filter(Boolean)
+    );
+    const followerIds = new Set(
+      followersUsers
+        .map((u) => normalizeId((u.id || u.username || '') as string))
+        .filter(Boolean)
+    );
+
+    const db = await getDB();
+    const tx = db.transaction('users', 'readwrite');
+    const now = Date.now();
+    let added = 0;
+    let updated = 0;
+    const touched = new Set<string>();
+
+    for (const user of scanned) {
+      if (!user.id && !user.username) continue;
+      const id = normalizeId((user.id || user.username)!);
+      touched.add(id);
+      const existing = await tx.store.get(id);
+
+      let isFollowing: boolean;
+      let isFollower: boolean;
+      if (followingComplete) {
+        isFollowing = followingIds.has(id) || Boolean(user.isFollowing);
+      } else {
+        isFollowing = Boolean(existing?.isFollowing || user.isFollowing);
+      }
+      if (followersComplete) {
+        isFollower = followerIds.has(id) || Boolean(user.isFollower);
+      } else {
+        isFollower = Boolean(existing?.isFollower || user.isFollower);
+      }
+
+      if (existing) {
+        const next: XUser = {
+          ...existing,
+          username: user.username || existing.username,
+          displayName: user.displayName || existing.displayName,
+          avatarUrl: user.avatarUrl || existing.avatarUrl,
+          bio: user.bio ?? existing.bio,
+          isFollowing,
+          isFollower,
+          firstSeenAt: existing.firstSeenAt,
+          lastSeenAt: now,
+          followersCount:
+            typeof user.followersCount === 'number'
+              ? user.followersCount
+              : existing.followersCount,
+          followingCount:
+            typeof user.followingCount === 'number'
+              ? user.followingCount
+              : existing.followingCount,
+        };
+        if (existing.isFollowing && !isFollowing) {
+          next.unfollowedAt = now;
+        }
+        if (!existing.isFollower && isFollower) {
+          next.followerSince = now;
+        }
+        await tx.store.put(next);
+        updated++;
+      } else {
+        await tx.store.put({
+          id,
+          username: user.username || id,
+          displayName: user.displayName || user.username || id,
+          avatarUrl: user.avatarUrl,
+          bio: user.bio,
+          isFollowing,
+          isFollower,
+          firstSeenAt: now,
+          lastSeenAt: now,
+          followersCount: user.followersCount,
+          followingCount: user.followingCount,
+          ...(isFollower ? { followerSince: now } : {}),
+        } as XUser);
+        added++;
+      }
+    }
+
+    // Tam taranan listelerde artık görünmeyenlerin bayraklarını düşür (kayıt silinmez)
+    if (followingComplete || followersComplete) {
+      let cursor = await tx.store.openCursor();
+      while (cursor) {
+        const existing = cursor.value as XUser;
+        if (!touched.has(existing.id)) {
+          let isFollowing = existing.isFollowing;
+          let isFollower = existing.isFollower;
+          if (followingComplete) isFollowing = false;
+          if (followersComplete) isFollower = false;
+
+          if (
+            isFollowing !== existing.isFollowing ||
+            isFollower !== existing.isFollower
+          ) {
+            const next: XUser = {
+              ...existing,
+              isFollowing,
+              isFollower,
+              lastSeenAt: now,
+            };
+            if (existing.isFollowing && !isFollowing) {
+              next.unfollowedAt = now;
+            }
+            await cursor.update(next);
+            updated++;
+          }
+        }
+        cursor = await cursor.continue();
+      }
+    }
+
+    await tx.done;
+    const all = await this.getAll();
+    return { total: all.length, added, updated };
   },
 
   async clear(): Promise<void> {
