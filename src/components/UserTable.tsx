@@ -205,6 +205,38 @@ export const UserTable: React.FC<UserTableProps> = ({
           />
         </div>
 
+        {/* Hızlı filtre: N kişiden az takipçi */}
+        <div className="flex flex-wrap items-center gap-2 mb-3">
+          <span className="text-xs font-medium text-gray-500 mr-0.5">Hızlı:</span>
+          {([50, 100, 500, 1000, 5000] as const).map((n) => {
+            const active = maxFollowers === n && minFollowers == null;
+            return (
+              <button
+                key={n}
+                type="button"
+                onClick={() => {
+                  if (active) {
+                    setMaxFollowersInput('');
+                    setMinFollowersInput('');
+                  } else {
+                    setMaxFollowersInput(String(n));
+                    setMinFollowersInput('');
+                    setHideUnknownCounts(true);
+                  }
+                }}
+                className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
+                  active
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'bg-white text-gray-700 border-gray-200 hover:border-blue-300 hover:bg-blue-50'
+                }`}
+                title={`${n} kişiden az takipçisi olanlar`}
+              >
+                &lt;{n}
+              </button>
+            );
+          })}
+        </div>
+
         {/* Takipçi sayısı filtresi */}
         <div className="flex flex-wrap items-end gap-3">
           <label className="flex flex-col gap-1">
@@ -227,7 +259,7 @@ export const UserTable: React.FC<UserTableProps> = ({
               type="number"
               min={0}
               inputMode="numeric"
-              placeholder="ör. 500"
+              placeholder="ör. 100"
               value={maxFollowersInput}
               onChange={(e) => setMaxFollowersInput(e.target.value)}
               className="w-28 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
