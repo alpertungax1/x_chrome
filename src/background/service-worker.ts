@@ -37,6 +37,31 @@ let active: ActiveScan | null = null;
 let scanTickTimer: ReturnType<typeof setInterval> | null = null;
 let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
 
+/** Büyük listelerde storage kotası / donma için: tamamlanan tarama sonuçları bellek + port ile. */
+const completedScanCache = new Map<
+  string,
+  {
+    status: 'completed' | 'cancelled' | 'error';
+    users: ScrapedUser[];
+    error?: string;
+    completedAt: number;
+    abortedByUser?: boolean;
+  }
+>();
+
+function slimUsers(users: ScrapedUser[]): ScrapedUser[] {
+  // avatarUrl storage'ı şişirir (7.5k+ listede kota/donma) — DB için de gerekmez
+  return users.map((u) => ({
+    id: u.id,
+    username: u.username,
+    displayName: u.displayName,
+    isFollowing: u.isFollowing,
+    isFollower: u.isFollower,
+    firstSeenAt: u.firstSeenAt,
+    lastSeenAt: u.lastSeenAt,
+  }));
+}
+
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name === 'dashboard' || port.name === 'scan-worker') {
     // Port SW'yi uyanık tutar
@@ -185,10 +210,13 @@ function scrapeAndScrollInPage(): {
       const m = text.match(re);
       if (!m) continue;
       const label = m[0].toLowerCase();
-      if (pageFollowing && label.includes('follower') && !label.includes('following'))
-        continue;
-      if (pageFollowers && label.includes('following') && !label.includes('follower'))
-        continue;
+      const isFollowerLabel =
+        label.includes('follower') || label.includes('takipçi');
+      const isFollowingLabel =
+        label.includes('following') || label.includes('takip edilen');
+      // Following sayfasında followers sayısını hedef sanma (TR/EN)
+      if (pageFollowing && isFollowerLabel && !isFollowingLabel) continue;
+      if (pageFollowers && isFollowingLabel && !isFollowerLabel) continue;
       const n = parseCount(m[1]);
       if (n != null && n >= 1 && n < 50_000_000) return n;
     }
@@ -351,55 +379,109 @@ async function completeScan(status: 'completed' | 'cancelled' | 'error', error?:
   active.finishing = true;
 
   const scanId = active.scanId;
-  const users = Array.from(active.users.values()).map((u) => ({
-    ...u,
-    firstSeenAt: u.firstSeenAt || Date.now(),
-    lastSeenAt: Date.now(),
-  }));
-
-  const result = {
-    status,
-    scanId,
-    users: status === 'error' ? [] : users,
-    error,
-    completedAt: Date.now(),
-    abortedByUser: status === 'cancelled',
-  };
+  const rawUsers =
+    status === 'error'
+      ? []
+      : Array.from(active.users.values()).map((u) => ({
+          ...u,
+          firstSeenAt: u.firstSeenAt || Date.now(),
+          lastSeenAt: Date.now(),
+        }));
+  const users = slimUsers(rawUsers);
+  const completedAt = Date.now();
+  const abortedByUser = status === 'cancelled';
 
   console.log(`Scan ${status}: ${users.length} users`, scanId);
 
   stopScanDriver();
   active = null;
 
+  // Bellek cache — storage yazılamasa bile dashboard GET_SCAN_RESULT ile alır
+  completedScanCache.set(scanId, {
+    status,
+    users,
+    error,
+    completedAt,
+    abortedByUser,
+  });
+  // Eski cache birikmesin
+  if (completedScanCache.size > 6) {
+    const oldest = completedScanCache.keys().next().value;
+    if (oldest) completedScanCache.delete(oldest);
+  }
+
+  const baseResult = {
+    status,
+    scanId,
+    users,
+    userCount: users.length,
+    error,
+    completedAt,
+    abortedByUser,
+  };
+
+  // 1) Önce hafif meta yaz — waitForScanResult hemen açılsın (users sonra / port ile)
   try {
     await chrome.storage.local.set({
       scanProgress: null,
       scanStatus: status,
-      scanResult: result,
       activeScanId: null,
+      scanResultMeta: {
+        status,
+        scanId,
+        userCount: users.length,
+        error,
+        completedAt,
+        abortedByUser,
+      },
     });
   } catch (err) {
-    console.error('Failed to write scanResult', err);
-    // users çok büyükse küçültülmüş sonuç dene
+    console.error('Failed to write scanResultMeta', err);
+  }
+
+  // 2) Tam sonuç (slim users) — kota patlarsa meta + cache yeter
+  let storedUsers = false;
+  try {
+    await chrome.storage.local.set({ scanResult: baseResult });
+    storedUsers = true;
+  } catch (err) {
+    console.warn('Full scanResult failed, trying without users', err);
     try {
       await chrome.storage.local.set({
-        scanProgress: null,
-        scanStatus: status,
         scanResult: {
-          ...result,
-          users: users.slice(0, 5000),
+          ...baseResult,
+          users: [],
+          usersPending: true,
         },
-        activeScanId: null,
       });
     } catch (err2) {
-      console.error('Failed to write truncated scanResult', err2);
+      console.error('Failed to write scanResult even without users', err2);
     }
   }
 
   await pushLiveProgress(null, 'clear');
-  if (status === 'completed') {
-    broadcastToDashboards({ type: 'SCAN_COMPLETED', payload: { users, scanId } });
-  }
+
+  // 3) Port — dashboard arka planda donmuş olsa bile SW→port genelde çalışır
+  broadcastToDashboards({
+    type: 'SCAN_COMPLETED',
+    payload: {
+      status,
+      scanId,
+      users,
+      userCount: users.length,
+      error,
+      completedAt,
+      abortedByUser,
+      storedUsers,
+    },
+  });
+
+  console.log('Scan handoff done', {
+    scanId,
+    status,
+    n: users.length,
+    storedUsers,
+  });
 }
 
 async function runScanTick() {
@@ -500,9 +582,27 @@ async function runScanTick() {
       // ignore
     }
 
-    // Bitiş: hedefe yakın
-    if (expected && expected >= 20 && active.users.size >= expected * 0.97) {
-      if (noGrowthMs > 12_000) {
+    // Bitiş: hedefe ulaştı / çok yakın — following bittiğinde takılmayı önle
+    if (expected && expected >= 20) {
+      const ratioNow = active.users.size / expected;
+      // %100+ veya tam hedef: 4 sn durgunluk yeterli
+      if (ratioNow >= 1.0 && noGrowthMs > 4_000) {
+        await publishProgress(
+          `Following tamam (~${active.users.size}/${expected}) — kapanıyor…`
+        );
+        await completeScan('completed');
+        return;
+      }
+      // %97+: 8 sn
+      if (ratioNow >= 0.97 && noGrowthMs > 8_000) {
+        await publishProgress(
+          `Hedefe ulaşıldı (${Math.round(ratioNow * 100)}%) — kapanıyor…`
+        );
+        await completeScan('completed');
+        return;
+      }
+      // %94+ ve 25 sn hiç büyüme yok (son birkaç hesap sanal listede kaybolabilir)
+      if (ratioNow >= 0.94 && noGrowthMs > 25_000) {
         await completeScan('completed');
         return;
       }
@@ -517,10 +617,10 @@ async function runScanTick() {
     // Durgunluk + yumuşak kurtarma (seyrek)
     const belowTarget =
       expected != null && expected > 50 && active.users.size < expected * 0.95;
-    const stagnantFor = belowTarget ? 75_000 : 50_000;
+    const stagnantFor = belowTarget ? 75_000 : 40_000;
     const sinceRecovery = now - active.lastRecoveryAt;
 
-    if (noGrowthMs > stagnantFor && sinceRecovery > 60_000) {
+    if (noGrowthMs > stagnantFor && sinceRecovery > 45_000) {
       active.recovery++;
       active.lastRecoveryAt = now;
       try {
@@ -537,10 +637,14 @@ async function runScanTick() {
       );
     }
 
-    // Çok uzun durgunluk → eldekiyle bitir
-    const minRec = belowTarget ? 10 : 6;
-    const minStag = belowTarget ? 6 * 60_000 : 4 * 60_000;
+    // Çok uzun durgunluk → eldekiyle bitir (following bitince followers'a geçilebilsin)
+    const minRec = belowTarget ? 8 : 4;
+    const minStag = belowTarget ? 4 * 60_000 : 2 * 60_000;
     if (active.recovery >= minRec && noGrowthMs > minStag) {
+      await completeScan('completed');
+    }
+    // expected yoksa: 90 sn hiç büyüme yoksa bitir
+    if (expected == null && noGrowthMs > 90_000 && active.users.size > 0) {
       await completeScan('completed');
     }
   } finally {
@@ -614,8 +718,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   // Content'in complete'ini yok say — SW yönetir (çift complete / restart önler)
-  if (message?.type === 'SCAN_COMPLETED') {
+  if (message?.type === 'SCAN_COMPLETED' && sender.tab) {
     sendResponse({ ok: true, ignored: true });
+    return false;
+  }
+
+  // Dashboard: storage'da users boşsa bellek cache'den al
+  if (message?.type === 'GET_SCAN_RESULT') {
+    const scanId = message.payload?.scanId as string | undefined;
+    if (!scanId) {
+      sendResponse({ ok: false, error: 'no scanId' });
+      return false;
+    }
+    const cached = completedScanCache.get(scanId);
+    if (cached) {
+      sendResponse({
+        ok: true,
+        status: cached.status,
+        scanId,
+        users: cached.users,
+        userCount: cached.users.length,
+        error: cached.error,
+        completedAt: cached.completedAt,
+        abortedByUser: cached.abortedByUser,
+      });
+    } else {
+      sendResponse({ ok: false, error: 'not_in_cache', scanId });
+    }
     return false;
   }
 

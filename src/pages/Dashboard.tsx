@@ -92,6 +92,7 @@ const Dashboard: React.FC = () => {
         'scanProgress',
         'scanStatus',
         'scanResult',
+        'scanResultMeta',
         'activeScanId',
       ]);
       await loadUsers();
@@ -116,7 +117,7 @@ const Dashboard: React.FC = () => {
       }
     };
 
-    // Uzun ömürlü port: SW progress'i doğrudan basar (runtime.sendMessage kaçsa bile)
+    // Uzun ömürlü port: SW progress + SCAN_COMPLETED (following bitince storage donmasın)
     let port: chrome.runtime.Port | null = null;
     const connectPort = () => {
       try {
@@ -125,6 +126,13 @@ const Dashboard: React.FC = () => {
           if (!scanSessionActiveRef.current) return;
           if (message?.type === 'SCAN_PROGRESS') {
             applyScanProgress(message.payload);
+          }
+          // waitForScanResult da dinler; burada sadece UI
+          if (message?.type === 'SCAN_COMPLETED') {
+            const n = message.payload?.userCount ?? message.payload?.users?.length;
+            if (n != null) {
+              setScanStatus(`Faz tamamlandı (${n} kullanıcı) — devam ediliyor…`);
+            }
           }
         });
         port.onDisconnect.addListener(() => {
@@ -263,6 +271,7 @@ const Dashboard: React.FC = () => {
 
     await chrome.storage.local.remove([
       'scanResult',
+      'scanResultMeta',
       'scanProgress',
       'scanStatus',
       'activeScanId',
@@ -304,7 +313,7 @@ const Dashboard: React.FC = () => {
       throwIfAborted();
 
       setScanStatus('Following sayfası yükleniyor...');
-      await waitForTabComplete(tabId);
+      await waitForTabComplete(tabId, 25000);
       throwIfAborted();
       await wait(2500);
       throwIfAborted();
@@ -316,7 +325,12 @@ const Dashboard: React.FC = () => {
       lastProgressTextRef.current = '';
       const followingScanId = `following_${Date.now()}`;
       activeScanIdRef.current = followingScanId;
-      await chrome.storage.local.remove(['scanResult', 'scanProgress', 'scanStatus']);
+      await chrome.storage.local.remove([
+        'scanResult',
+        'scanResultMeta',
+        'scanProgress',
+        'scanStatus',
+      ]);
       await startScanOnTab(tabId, followingScanId);
       // Tarama penceresi odakta kalsın (scroll/DOM için); dashboard bar'ı SW günceller
       try {
@@ -343,22 +357,29 @@ const Dashboard: React.FC = () => {
         throw new ScanAbortedError();
       }
 
-      // --- Followers ---
-      setScanStatus('Takipçiler taranıyor...');
+      // --- Followers (following bitti → sayfa değiştir) ---
+      setScanStatus(
+        `Following tamam (${followingUsers.length}). Takipçiler sayfasına geçiliyor…`
+      );
       lastProgressTextRef.current = '';
       const followersUrl = `https://x.com/${username}/followers`;
-      await chrome.tabs.update(tabId, { url: followersUrl });
       throwIfAborted();
-      await waitForTabComplete(tabId);
+      await navigateTabAndWait(tabId, followersUrl);
       throwIfAborted();
-      await wait(2500);
+      await wait(3000);
       throwIfAborted();
       await ensureContentScript(tabId);
       throwIfAborted();
 
+      setScanStatus('Takipçiler taranıyor...');
       const followersScanId = `followers_${Date.now()}`;
       activeScanIdRef.current = followersScanId;
-      await chrome.storage.local.remove(['scanResult', 'scanProgress', 'scanStatus']);
+      await chrome.storage.local.remove([
+        'scanResult',
+        'scanResultMeta',
+        'scanProgress',
+        'scanStatus',
+      ]);
       await startScanOnTab(tabId, followersScanId);
       try {
         if (scanningWindowIdRef.current != null) {
@@ -393,6 +414,7 @@ const Dashboard: React.FC = () => {
         'scanProgress',
         'scanStatus',
         'scanResult',
+        'scanResultMeta',
         'activeScanId',
       ]);
       closeScanningWindow();
@@ -411,6 +433,7 @@ const Dashboard: React.FC = () => {
         'scanProgress',
         'scanStatus',
         'scanResult',
+        'scanResultMeta',
         'activeScanId',
       ]);
 
@@ -751,7 +774,7 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function waitForTabComplete(tabId: number): Promise<void> {
+function waitForTabComplete(tabId: number, timeoutMs = 20000): Promise<void> {
   return new Promise((resolve) => {
     // Zaten yüklenmiş olabilir
     chrome.tabs.get(tabId, (tab) => {
@@ -775,7 +798,66 @@ function waitForTabComplete(tabId: number): Promise<void> {
       setTimeout(() => {
         chrome.tabs.onUpdated.removeListener(listener);
         resolve();
-      }, 20000);
+      }, timeoutMs);
+    });
+  });
+}
+
+/**
+ * URL değiştir ve YENİ yüklemenin complete olmasını bekle.
+ * Eski waitForTabComplete: tabs.update sonrası status hâlâ 'complete' kalırsa
+ * hemen resolve olup yanlış sayfada tarama başlatıyordu.
+ */
+function navigateTabAndWait(tabId: number, url: string, timeoutMs = 45000): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let sawLoading = false;
+
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      chrome.tabs.onUpdated.removeListener(listener);
+      clearTimeout(timer);
+      resolve();
+    };
+
+    const listener = (
+      updatedTabId: number,
+      changeInfo: chrome.tabs.TabChangeInfo,
+      tab: chrome.tabs.Tab
+    ) => {
+      if (updatedTabId !== tabId) return;
+      if (changeInfo.status === 'loading') sawLoading = true;
+      if (changeInfo.status === 'complete' && sawLoading) {
+        // URL eşleşsin (redirect x.com ↔ twitter.com)
+        const href = tab.url || '';
+        if (
+          !url ||
+          href.includes('/followers') ||
+          href.includes('/following') ||
+          href.startsWith(url.split('?')[0])
+        ) {
+          finish();
+        }
+      }
+    };
+
+    chrome.tabs.onUpdated.addListener(listener);
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      chrome.tabs.onUpdated.removeListener(listener);
+      // Timeout: yine de devam et (X yavaş olabilir)
+      resolve();
+    }, timeoutMs);
+
+    chrome.tabs.update(tabId, { url }).catch((err) => {
+      if (settled) return;
+      settled = true;
+      chrome.tabs.onUpdated.removeListener(listener);
+      clearTimeout(timer);
+      reject(err);
     });
   });
 }
@@ -868,9 +950,9 @@ async function startScanOnTab(tabId: number, scanId: string): Promise<void> {
 }
 
 /**
- * Belirli scanId için storage.scanResult yazılana kadar bekle.
- * completed | cancelled | error kabul edilir. Eski sonuçlar scanId ile elenir.
- * isAborted true olursa ve abortedByUser sonucu gelirse de çıkar.
+ * Belirli scanId için sonuç bekle.
+ * Kanallar: storage.scanResult, storage.scanResultMeta, dashboard port SCAN_COMPLETED,
+ * runtime GET_SCAN_RESULT (SW bellek cache). Büyük listelerde storage users boş gelebilir.
  */
 function waitForScanResult(
   scanId: string,
@@ -885,6 +967,7 @@ function waitForScanResult(
 }> {
   return new Promise((resolve, reject) => {
     let done = false;
+    let port: chrome.runtime.Port | null = null;
 
     const matches = (result: any) => {
       if (!result) return false;
@@ -893,46 +976,136 @@ function waitForScanResult(
         result.status === 'error' ||
         result.status === 'cancelled';
       if (!okStatus) return false;
-      // Kullanıcı abort ettiyse scanId eşleşmese de (anında iptal) kabul et
       if (result.status === 'cancelled' && result.abortedByUser) return true;
       return result.scanId === scanId;
     };
 
-    const finish = (result: any) => {
-      if (done) return;
-      done = true;
+    const cleanup = () => {
       chrome.storage.onChanged.removeListener(onChange);
+      try {
+        port?.disconnect();
+      } catch {
+        // ignore
+      }
+      port = null;
       clearTimeout(timer);
       clearInterval(poll);
-      resolve(result);
+    };
+
+    const finish = async (result: any) => {
+      if (done) return;
+      done = true;
+      cleanup();
+
+      let users = Array.isArray(result?.users) ? result.users : [];
+      // Storage kotası / slim meta: users boşsa SW cache'den çek
+      if (
+        users.length === 0 &&
+        result?.status !== 'error' &&
+        (result?.usersPending || (result?.userCount ?? 0) > 0 || result?.status === 'completed')
+      ) {
+        try {
+          const fromSw = await chrome.runtime.sendMessage({
+            type: 'GET_SCAN_RESULT',
+            payload: { scanId },
+          });
+          if (fromSw?.ok && Array.isArray(fromSw.users) && fromSw.users.length > 0) {
+            users = fromSw.users;
+          }
+        } catch (err) {
+          console.warn('GET_SCAN_RESULT failed', err);
+        }
+      }
+
+      resolve({
+        status: result.status,
+        scanId: result.scanId || scanId,
+        users,
+        error: result.error,
+        completedAt: result.completedAt,
+      });
     };
 
     const onChange = (changes: { [key: string]: chrome.storage.StorageChange }, area: string) => {
       if (area !== 'local') return;
-      const result = changes.scanResult?.newValue;
-      if (matches(result)) finish(result);
+      if (matches(changes.scanResult?.newValue)) {
+        void finish(changes.scanResult.newValue);
+        return;
+      }
+      // Meta erken yazılır — users cache'den gelir
+      const meta = changes.scanResultMeta?.newValue;
+      if (matches(meta)) {
+        void finish({ ...meta, users: [], usersPending: true });
+      }
     };
 
     chrome.storage.onChanged.addListener(onChange);
 
-    const poll = setInterval(() => {
-      if (isAborted?.() && !done) {
-        // content henüz cancelled yazmadıysa yine de bekle; handleStopScan yazar
-      }
-      chrome.storage.local.get(['scanResult'], (data) => {
-        if (matches(data.scanResult)) finish(data.scanResult);
+    // Port: following biter bitmez SCAN_COMPLETED (storage donmasa bile)
+    try {
+      port = chrome.runtime.connect({ name: 'dashboard' });
+      port.onMessage.addListener((message: any) => {
+        if (message?.type !== 'SCAN_COMPLETED') return;
+        const p = message.payload;
+        if (!p) return;
+        if (p.scanId !== scanId && !(p.status === 'cancelled' && p.abortedByUser)) return;
+        void finish({
+          status: p.status || 'completed',
+          scanId: p.scanId || scanId,
+          users: p.users || [],
+          userCount: p.userCount,
+          error: p.error,
+          completedAt: p.completedAt,
+          abortedByUser: p.abortedByUser,
+        });
       });
-    }, 400);
+      port.onDisconnect.addListener(() => {
+        port = null;
+      });
+    } catch {
+      port = null;
+    }
 
-    chrome.storage.local.get(['scanResult'], (data) => {
-      if (matches(data.scanResult)) finish(data.scanResult);
+    const poll = setInterval(() => {
+      if (done) return;
+      void chrome.storage.local.get(['scanResult', 'scanResultMeta']).then(async (data) => {
+        if (matches(data.scanResult)) {
+          await finish(data.scanResult);
+          return;
+        }
+        if (matches(data.scanResultMeta)) {
+          await finish({ ...data.scanResultMeta, users: [], usersPending: true });
+          return;
+        }
+        // Son çare: doğrudan SW cache
+        try {
+          const fromSw = await chrome.runtime.sendMessage({
+            type: 'GET_SCAN_RESULT',
+            payload: { scanId },
+          });
+          if (fromSw?.ok && fromSw.status) {
+            await finish(fromSw);
+          }
+        } catch {
+          // ignore
+        }
+      });
+      if (isAborted?.() && !done) {
+        // handleStopScan storage'a cancelled yazar
+      }
+    }, 500);
+
+    void chrome.storage.local.get(['scanResult', 'scanResultMeta']).then((data) => {
+      if (matches(data.scanResult)) void finish(data.scanResult);
+      else if (matches(data.scanResultMeta)) {
+        void finish({ ...data.scanResultMeta, users: [], usersPending: true });
+      }
     });
 
     const timer = setTimeout(() => {
       if (done) return;
       done = true;
-      chrome.storage.onChanged.removeListener(onChange);
-      clearInterval(poll);
+      cleanup();
       reject(
         new Error(
           'Tarama zaman aşımına uğradı (3 saat). Popup açık kalsın; tarama arka planda SW ile sürer.'
