@@ -49,18 +49,13 @@ export const UserTable: React.FC<UserTableProps> = ({
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { updateUsersBatch } = useAppStore();
 
-  const [sorsaApiKey, setSorsaApiKey] = useState(() => localStorage.getItem('sorsaApiKey') || '');
   const [sorsaLoading, setSorsaLoading] = useState(false);
   const [sorsaProgress, setSorsaProgress] = useState<{ fetched: number; total: number } | null>(null);
   const [sorsaError, setSorsaError] = useState('');
-  const [showSorsaInput, setShowSorsaInput] = useState(false);
 
   const handleFetchWithSorsa = async () => {
-    if (!sorsaApiKey) {
-      setShowSorsaInput(true);
-      return;
-    }
-    localStorage.setItem('sorsaApiKey', sorsaApiKey);
+    const sorsaApiKey = localStorage.getItem('sorsaApiKey');
+    if (!sorsaApiKey) return; // Modal sayesinde normalde bura hep doludur
     
     const unknownUsers = users.filter(u => typeof u.followersCount !== 'number');
     if (unknownUsers.length === 0) return;
@@ -82,8 +77,6 @@ export const UserTable: React.FC<UserTableProps> = ({
       
       if (!result.success) {
         setSorsaError(result.error || 'API Error');
-      } else {
-        setShowSorsaInput(false);
       }
     } catch (e: any) {
       setSorsaError(e.message || 'Error occurred');
@@ -395,31 +388,6 @@ export const UserTable: React.FC<UserTableProps> = ({
                     : `${unknownCountInFilter} users hidden (no follower count). Due to X's recent API limits, bulk follower counts can no longer be fetched.`}
                 </p>
                 {sorsaError && <p className="text-xs text-red-600 mt-1 font-medium">{sorsaError}</p>}
-                
-                {showSorsaInput && !sorsaLoading && (
-                  <div className="mt-2 flex items-center gap-2">
-                    <Key size={14} className="text-amber-600" />
-                    <input
-                      type="text"
-                      placeholder="Sorsa API Key (örn: 4b2ec005-...)"
-                      value={sorsaApiKey}
-                      onChange={(e) => setSorsaApiKey(e.target.value)}
-                      className="text-xs px-2 py-1 border border-amber-300 rounded focus:outline-none focus:border-amber-500 w-64"
-                    />
-                    <button
-                      onClick={handleFetchWithSorsa}
-                      className="text-xs px-3 py-1 bg-amber-600 text-white rounded hover:bg-amber-700 font-medium"
-                    >
-                      {lang === 'tr' ? 'Başlat' : 'Start'}
-                    </button>
-                    <button
-                      onClick={() => setShowSorsaInput(false)}
-                      className="text-xs px-2 py-1 text-amber-700 hover:text-amber-900"
-                    >
-                      {lang === 'tr' ? 'İptal' : 'Cancel'}
-                    </button>
-                  </div>
-                )}
               </div>
             </div>
             <div className="flex flex-col items-end gap-2">
@@ -430,19 +398,17 @@ export const UserTable: React.FC<UserTableProps> = ({
               >
                 {lang === 'tr' ? 'Hepsini göster' : 'Show all'}
               </button>
-              {!showSorsaInput && (
-                <button
-                  type="button"
-                  onClick={handleFetchWithSorsa}
-                  disabled={sorsaLoading}
-                  className="flex-shrink-0 text-xs font-medium bg-amber-100 text-amber-800 px-3 py-1.5 rounded border border-amber-300 hover:bg-amber-200 whitespace-nowrap flex items-center gap-1 disabled:opacity-50"
-                >
-                  {sorsaLoading && <Loader2 size={12} className="animate-spin" />}
-                  {sorsaLoading && sorsaProgress
-                    ? `${lang === 'tr' ? 'Çekiliyor' : 'Fetching'} (${sorsaProgress.fetched}/${sorsaProgress.total})`
-                    : lang === 'tr' ? 'Sorsa API ile Sayıları Çek' : 'Fetch with Sorsa API'}
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={handleFetchWithSorsa}
+                disabled={sorsaLoading}
+                className="flex-shrink-0 text-xs font-medium bg-amber-100 text-amber-800 px-3 py-1.5 rounded border border-amber-300 hover:bg-amber-200 whitespace-nowrap flex items-center gap-1 disabled:opacity-50"
+              >
+                {sorsaLoading && <Loader2 size={12} className="animate-spin" />}
+                {sorsaLoading && sorsaProgress
+                  ? `${lang === 'tr' ? 'Çekiliyor' : 'Fetching'} (${sorsaProgress.fetched}/${sorsaProgress.total})`
+                  : lang === 'tr' ? 'Sorsa API ile Sayıları Çek' : 'Fetch with Sorsa API'}
+              </button>
             </div>
           </div>
         </div>
@@ -457,31 +423,6 @@ export const UserTable: React.FC<UserTableProps> = ({
                 : `${unknownCountInFilter} users have unknown counts — shown outside filter.`}
             </p>
             {sorsaError && <p className="text-xs text-red-600 mt-1 font-medium">{sorsaError}</p>}
-            
-            {showSorsaInput && !sorsaLoading && (
-              <div className="mt-2 flex items-center gap-2">
-                <Key size={14} className="text-blue-600" />
-                <input
-                  type="text"
-                  placeholder="Sorsa API Key (örn: 4b2ec005-...)"
-                  value={sorsaApiKey}
-                  onChange={(e) => setSorsaApiKey(e.target.value)}
-                  className="text-xs px-2 py-1 border border-blue-300 rounded focus:outline-none focus:border-blue-500 w-64"
-                />
-                <button
-                  onClick={handleFetchWithSorsa}
-                  className="text-xs px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 font-medium"
-                >
-                  {lang === 'tr' ? 'Başlat' : 'Start'}
-                </button>
-                <button
-                  onClick={() => setShowSorsaInput(false)}
-                  className="text-xs px-2 py-1 text-blue-700 hover:text-blue-900"
-                >
-                  {lang === 'tr' ? 'İptal' : 'Cancel'}
-                </button>
-              </div>
-            )}
           </div>
           <div className="flex flex-col items-end gap-2">
             <button
@@ -491,19 +432,17 @@ export const UserTable: React.FC<UserTableProps> = ({
             >
               {lang === 'tr' ? 'Sadece sayıları bilinenleri filtrele' : 'Only filter known counts'}
             </button>
-            {!showSorsaInput && (
-              <button
-                type="button"
-                onClick={handleFetchWithSorsa}
-                disabled={sorsaLoading}
-                className="flex-shrink-0 text-xs font-medium bg-blue-100 text-blue-800 px-3 py-1.5 rounded border border-blue-300 hover:bg-blue-200 whitespace-nowrap flex items-center gap-1 disabled:opacity-50"
-              >
-                {sorsaLoading && <Loader2 size={12} className="animate-spin" />}
-                {sorsaLoading && sorsaProgress
-                  ? `${lang === 'tr' ? 'Çekiliyor' : 'Fetching'} (${sorsaProgress.fetched}/${sorsaProgress.total})`
-                  : lang === 'tr' ? 'Sorsa API ile Sayıları Çek' : 'Fetch with Sorsa API'}
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={handleFetchWithSorsa}
+              disabled={sorsaLoading}
+              className="flex-shrink-0 text-xs font-medium bg-blue-100 text-blue-800 px-3 py-1.5 rounded border border-blue-300 hover:bg-blue-200 whitespace-nowrap flex items-center gap-1 disabled:opacity-50"
+            >
+              {sorsaLoading && <Loader2 size={12} className="animate-spin" />}
+              {sorsaLoading && sorsaProgress
+                ? `${lang === 'tr' ? 'Çekiliyor' : 'Fetching'} (${sorsaProgress.fetched}/${sorsaProgress.total})`
+                : lang === 'tr' ? 'Sorsa API ile Sayıları Çek' : 'Fetch with Sorsa API'}
+            </button>
           </div>
         </div>
       )}

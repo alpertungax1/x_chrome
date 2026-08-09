@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useAppStore } from '../store/app-store';
 import { StatsCard } from '../components/StatsCard';
 import { UserTable } from '../components/UserTable';
+import { ApiKeyModal } from '../components/ApiKeyModal';
 import { XUser } from '../types/user';
 import { relationshipAnalyzer } from '../analysis/relationship-analyzer';
 import { Users, UserMinus, UserCheck, Activity, Square, Globe } from 'lucide-react';
@@ -27,6 +28,10 @@ const Dashboard: React.FC = () => {
   const scanningWindowIdRef = React.useRef<number | null>(null);
   const scanningTabIdRef = React.useRef<number | null>(null);
   const dashboardWindowIdRef = React.useRef<number | null>(null);
+  
+  // Global API Key kontrolü
+  const [globalApiKey, setGlobalApiKey] = useState(() => localStorage.getItem('sorsaApiKey') || '');
+
   // Sadece kullanıcı "Scan Now" bastığında true — açılışta asla tarama UI'sı yok
   const scanSessionActiveRef = React.useRef(false);
   const scanAbortRef = React.useRef(false);
@@ -41,12 +46,8 @@ const Dashboard: React.FC = () => {
   const [sorsaScanActive, setSorsaScanActive] = useState(false);
 
   const handleSorsaFullScan = async () => {
-    let apiKey = localStorage.getItem('sorsaApiKey') || '';
-    if (!apiKey) {
-      apiKey = window.prompt(languageRef.current === 'tr' ? 'Lütfen Sorsa API Key giriniz:' : 'Please enter Sorsa API Key:') || '';
-      if (!apiKey) return;
-      localStorage.setItem('sorsaApiKey', apiKey);
-    }
+    // Modal sayesinde globalApiKey kesin var
+    const apiKey = globalApiKey;
     
     const username = window.prompt(languageRef.current === 'tr' ? 'Kendi kullanıcı adınızı giriniz (başında @ olmadan):' : 'Enter your username (without @):');
     if (!username) return;
@@ -792,6 +793,17 @@ const Dashboard: React.FC = () => {
       ? 'bg-blue-50 text-blue-700' 
       : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
   }`;
+
+  if (!globalApiKey) {
+    return (
+      <ApiKeyModal 
+        onSave={(key) => {
+          localStorage.setItem('sorsaApiKey', key);
+          setGlobalApiKey(key);
+        }} 
+      />
+    );
+  }
 
   return (
     <div className="flex h-screen bg-gray-50 text-gray-900">
