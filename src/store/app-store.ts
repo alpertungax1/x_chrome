@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { XUser, ScanSession } from '../types/user';
-import { userRepository, mergeScanUsers } from '../db/users.repository';
+import { userRepository } from '../db/users.repository';
 import { relationshipAnalyzer } from '../analysis/relationship-analyzer';
 
 function computeStats(users: XUser[]) {
