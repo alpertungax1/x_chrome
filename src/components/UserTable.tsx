@@ -122,6 +122,17 @@ export const UserTable: React.FC<UserTableProps> = ({
     return list;
   }, [users, debouncedQuery, maxFollowers, minFollowers, hideUnknownCounts, hasCountFilter]);
 
+  // Sayı filtresi aktive/deaktive edilince hideUnknownCounts'u otomatik güncelle
+  // Filtre aktifse bilinmeyenleri gizle (filtre anlamlı çalışsın)
+  // Filtre kaldırılınca bilinmeyenleri tekrar göster
+  useEffect(() => {
+    if (maxFollowers != null || minFollowers != null) {
+      setHideUnknownCounts(true);
+    } else {
+      setHideUnknownCounts(false);
+    }
+  }, [maxFollowers, minFollowers]);
+
   useEffect(() => {
     setCurrentPage(1);
   }, [maxFollowers, minFollowers, hideUnknownCounts, debouncedQuery]);
@@ -332,17 +343,44 @@ export const UserTable: React.FC<UserTableProps> = ({
         </p>
       </div>
 
-      {/* Count filtresi aktif ama sayılar bilinmiyor uyarısı */}
-      {hasCountFilter && unknownCountInFilter > 0 && (
-        <div className="mx-6 mt-3 mb-1 flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2.5">
-          <AlertTriangle size={14} className="text-amber-500 flex-shrink-0 mt-0.5" />
-          <p className="text-xs text-amber-700 leading-relaxed">
-            {lang === 'tr'
-              ? `${unknownCountInFilter} kullanıcının takipçi sayısı bilinmiyor — bu kullanıcılar filtreye dahil edildi. Sayıya göre filtrelemek için yeniden Tara çalıştırın.`
-              : `${unknownCountInFilter} users have no follower count — they are included in the filter. Run Scan Now to fetch counts.`}
-          </p>
+      {/* Count filtresi aktif ve bilinmeyenler gizli uyarısı */}
+      {hasCountFilter && unknownCountInFilter > 0 && hideUnknownCounts && (
+        <div className="mx-6 mt-3 mb-1 flex items-center justify-between gap-2 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2.5">
+          <div className="flex items-start gap-2">
+            <AlertTriangle size={14} className="text-amber-500 flex-shrink-0 mt-0.5" />
+            <p className="text-xs text-amber-700 leading-relaxed">
+              {lang === 'tr'
+                ? `${unknownCountInFilter} kullanıcı gizlendi (takipçi sayısı bilinmiyor). Yeniden Tara çalıştırarak sayıları çekebilirsiniz.`
+                : `${unknownCountInFilter} users hidden (no follower count). Run Scan Now to fetch counts.`}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setHideUnknownCounts(false)}
+            className="flex-shrink-0 text-xs font-medium text-amber-700 underline hover:text-amber-900 whitespace-nowrap"
+          >
+            {lang === 'tr' ? 'Hepsini göster' : 'Show all'}
+          </button>
         </div>
       )}
+      {/* Count filtresi aktif ama bilinmeyenler gösteriliyorsa bilgi */}
+      {hasCountFilter && unknownCountInFilter > 0 && !hideUnknownCounts && (
+        <div className="mx-6 mt-3 mb-1 flex items-center justify-between gap-2 bg-blue-50 border border-blue-200 rounded-lg px-4 py-2.5">
+          <p className="text-xs text-blue-700">
+            {lang === 'tr'
+              ? `${unknownCountInFilter} kullanıcının sayısı bilinmiyor — filtre dışı gösteriliyor.`
+              : `${unknownCountInFilter} users have unknown counts — shown outside filter.`}
+          </p>
+          <button
+            type="button"
+            onClick={() => setHideUnknownCounts(true)}
+            className="flex-shrink-0 text-xs font-medium text-blue-700 underline hover:text-blue-900 whitespace-nowrap"
+          >
+            {lang === 'tr' ? 'Gizle' : 'Hide'}
+          </button>
+        </div>
+      )}
+
 
       {/* Toplu İşlem Barı */}
       {selectedIds.size > 0 && (
