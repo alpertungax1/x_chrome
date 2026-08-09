@@ -238,6 +238,12 @@ function initContentScript() {
         area: string
       ) => {
         if (area !== 'local') return;
+        
+        // Eğer abort komutu gelirse veya global iptal edilirse, listener'ı uçur
+        if (changes.scanStatus?.newValue === 'cancelled') {
+          chrome.storage.onChanged.removeListener(onStorage);
+        }
+
         if (changes.scanProgress?.newValue) {
           const p = changes.scanProgress.newValue;
           if (p.scanId && p.scanId !== scanId) return;
@@ -266,7 +272,16 @@ function initContentScript() {
           }
         }
       };
+      
+      const onMessage = (msg: any) => {
+        if (msg.type === 'SCAN_STOP') {
+          chrome.storage.onChanged.removeListener(onStorage);
+          chrome.runtime.onMessage.removeListener(onMessage);
+        }
+      };
+      
       chrome.storage.onChanged.addListener(onStorage);
+      chrome.runtime.onMessage.addListener(onMessage);
 
       return false;
     }
@@ -293,6 +308,8 @@ function initContentScript() {
         actionHandler.unfollowUser(username).then((success) => sendResponse({ success }));
         return true;
       }
+      sendResponse({ success: false, error: 'Unknown actionType' });
+      return false;
     }
 
     return false;

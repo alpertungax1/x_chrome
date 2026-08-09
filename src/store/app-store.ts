@@ -63,8 +63,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ language: lang });
     try {
       void chrome.storage.sync.set({ language: lang });
-    } catch {
-      // ignore
+    } catch (err) {
+      console.warn('setLanguage: chrome.storage.sync failed', err);
     }
   },
 
@@ -88,6 +88,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({
       users: [],
       stats: { followers: 0, following: 0, notFollowing: 0, mutuals: 0 },
+      isLoading: false,
     });
   },
 

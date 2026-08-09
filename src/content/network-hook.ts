@@ -67,7 +67,9 @@
           ? req
           : req instanceof Request
             ? req.url
-            : String(req ?? '');
+            : req instanceof URL
+              ? req.toString()
+              : String(req ?? '');
       if (/graphql|Followers|Following|UserBy|UserResult/i.test(url)) {
         const clone = res.clone();
         void clone

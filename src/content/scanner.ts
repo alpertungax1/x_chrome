@@ -127,16 +127,10 @@ export class XScanner {
         lastGrowthAt = Date.now();
         this.lastGrowthAt = lastGrowthAt;
         fullRecoveryCycles = 0;
-      } else {
-        // SW tick büyüttüyse senkronize et
-        if (this.collectedUsers.size > lastCount) {
-          lastCount = this.collectedUsers.size;
-          lastGrowthAt = this.lastGrowthAt;
-          fullRecoveryCycles = 0;
-        }
       }
 
-      const root = this.scrollRoot!;
+      const root: HTMLElement = this.scrollRoot ?? this.findScrollRoot();
+      this.scrollRoot = root;
       const sh = root.scrollHeight;
       if (sh > lastScrollHeight + 10) lastScrollHeight = sh;
 
@@ -351,7 +345,8 @@ export class XScanner {
       let n = parseFloat(kMatch[1].replace(',', '.'));
       const u = kMatch[2].toUpperCase();
       if (u === 'K') n *= 1_000;
-      if (u === 'M' || u === 'B') n *= 1_000_000;
+      if (u === 'M') n *= 1_000_000;
+      if (u === 'B') n *= 1_000_000_000;
       return Math.round(n);
     }
     // binlik ayırıcı: 7.543 veya 7,543 → 7543 (3 basamak grup)

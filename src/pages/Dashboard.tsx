@@ -33,6 +33,7 @@ const Dashboard: React.FC = () => {
   const activeScanIdRef = React.useRef<string | null>(null);
   const lastSeenUsersUpdatedAtRef = React.useRef<number | null>(null);
   const lastProgressTextRef = React.useRef('');
+  const stopTimeoutRef = React.useRef<ReturnType<typeof window.setTimeout> | null>(null);
 
   // Aksiyon state'leri
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
@@ -133,12 +134,13 @@ const Dashboard: React.FC = () => {
             applyScanProgress(message.payload);
           }
           // waitForScanResult da dinler; burada sadece UI
-          if (message?.type === 'SCAN_COMPLETED') {
-            const n = message.payload?.userCount ?? message.payload?.users?.length;
-            if (n != null) {
-              setScanStatus(t.scan.phaseComplete(n));
+            if (message?.type === 'SCAN_COMPLETED') {
+              const n = message.payload?.userCount ?? message.payload?.users?.length;
+              if (n != null) {
+                const currentT = translations[languageRef.current as keyof typeof translations] || translations.en;
+                setScanStatus(currentT.scan.phaseComplete(n));
+              }
             }
-          }
         });
         port.onDisconnect.addListener(() => {
           port = null;
@@ -171,8 +173,8 @@ const Dashboard: React.FC = () => {
       if (!scanSessionActiveRef.current) return;
       const detail = (ev as CustomEvent).detail as { text?: string; count?: number | null };
       if (!detail?.text) return;
-      // text: "Tarama sürüyor... Bulunan: N | ..."
-      const m = detail.text.match(/Bulunan:\s*(\d+)(.*)$/);
+      // text: "Tarama sürüyor... Bulunan: N | ..." veya "Scanning... Found: N | ..."
+      const m = detail.text.match(/(?:Bulunan|Found):\s*(\d+)(.*)$/);
       if (m) {
         applyScanProgress({
           foundUsersCount: Number(m[1]),
@@ -244,7 +246,9 @@ const Dashboard: React.FC = () => {
     }
 
     // Content 2 sn içinde cevap vermezse waitForScanResult'ı serbest bırak
-    window.setTimeout(() => {
+    if (stopTimeoutRef.current) window.clearTimeout(stopTimeoutRef.current);
+    stopTimeoutRef.current = window.setTimeout(() => {
+      stopTimeoutRef.current = null;
       if (!scanAbortRef.current) return;
       void chrome.storage.local.get(['scanResult']).then((data) => {
         const r = data.scanResult;
@@ -282,8 +286,8 @@ const Dashboard: React.FC = () => {
       'activeScanId',
     ]);
 
-    let followingUsers: any[] = [];
-    let followersUsers: any[] = [];
+    let followingUsers: Partial<XUser>[] = [];
+    let followersUsers: Partial<XUser>[] = [];
     let listMerged = false;
     let followingComplete = false;
     let followersComplete = false;

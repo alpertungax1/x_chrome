@@ -321,11 +321,12 @@ function scrapeAndScrollInPage(): {
 
   function parseCount(raw: string): number | null {
     let s = raw.trim().replace(/\s/g, '');
-    const k = s.match(/^([\d.,]+)([KkMm])$/);
+    const k = s.match(/^([\d.,]+)([KkMmBb])$/);
     if (k) {
       let n = parseFloat(k[1].replace(',', '.'));
       if (k[2].toUpperCase() === 'K') n *= 1000;
       if (k[2].toUpperCase() === 'M') n *= 1_000_000;
+      if (k[2].toUpperCase() === 'B') n *= 1_000_000_000;
       return Math.round(n);
     }
     if (/^\d{1,3}([.,]\d{3})+$/.test(s)) return parseInt(s.replace(/[.,]/g, ''), 10);
@@ -697,22 +698,23 @@ async function runScanTick() {
     }
 
     if (!pageResult || !active) return;
+    const currentActive = active;
 
     const now = Date.now();
     let added = 0;
     let withCounts = 0;
     for (const u of pageResult.users) {
       if (!u?.id) continue;
-      if (!active.users.has(u.id)) {
-        active.users.set(u.id, {
+      if (!currentActive.users.has(u.id)) {
+        currentActive.users.set(u.id, {
           ...u,
           firstSeenAt: now,
           lastSeenAt: now,
         });
         added++;
       } else {
-        const prev = active.users.get(u.id)!;
-        active.users.set(u.id, {
+        const prev = currentActive.users.get(u.id)!;
+        currentActive.users.set(u.id, {
           ...prev,
           ...u,
           isFollowing: prev.isFollowing || u.isFollowing,
@@ -729,7 +731,7 @@ async function runScanTick() {
         });
       }
     }
-    for (const u of active.users.values()) {
+    for (const u of currentActive.users.values()) {
       if (typeof u.followersCount === 'number') withCounts++;
     }
 
@@ -737,7 +739,7 @@ async function runScanTick() {
     // sayılarını da güncelle (sanal liste sorununun çözümü)
     if (pageResult.fullMeta) {
       for (const [id, m] of Object.entries(pageResult.fullMeta)) {
-        const existing = active.users.get(id);
+        const existing = currentActive.users.get(id);
         if (!existing) continue;
         let changed = false;
         if (typeof m.followersCount === 'number' && typeof existing.followersCount !== 'number') {
@@ -748,24 +750,24 @@ async function runScanTick() {
           existing.followingCount = m.followingCount;
           changed = true;
         }
-        if (changed) active.users.set(id, existing);
+        if (changed) currentActive.users.set(id, existing);
       }
       // withCounts'u yeniden hesapla
       withCounts = 0;
-      for (const u of active.users.values()) {
+      for (const u of currentActive.users.values()) {
         if (typeof u.followersCount === 'number') withCounts++;
       }
     }
 
-    if (pageResult.expected != null) active.expected = pageResult.expected;
+    if (pageResult.expected != null) currentActive.expected = pageResult.expected;
 
-    if (active.users.size > active.lastCount) {
-      active.lastCount = active.users.size;
-      active.lastGrowthAt = now;
-      active.recovery = 0;
+    if (currentActive.users.size > currentActive.lastCount) {
+      currentActive.lastCount = currentActive.users.size;
+      currentActive.lastGrowthAt = now;
+      currentActive.recovery = 0;
     }
 
-    const expected = active.expected;
+    const expected = currentActive.expected;
     const noGrowthMs = now - active.lastGrowthAt;
     const ratio =
       expected && expected > 0 ? active.users.size / expected : null;

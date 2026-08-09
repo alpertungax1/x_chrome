@@ -59,15 +59,15 @@ export const UserTable: React.FC<UserTableProps> = ({
     }, 300);
   }, []);
 
-  // Kullanıcı listesi değişince seçimleri temizle (view switch, yeniden tarama vb.)
+  // Kullanıcı listesi değişince seçimleri temizle.
+  // users referansı yerine ID join'i kullanıyoruz: parent render'ı
+  // yeni array referansı üretse bile gereksiz reset olmaz.
+  const usersKey = users.map((u) => u.id).join(',');
   useEffect(() => {
     setSelectedIds(new Set());
-  }, [users]);
-
-  // Sayfa değiştiğinde seçimleri sıfırla
-  useEffect(() => {
     setCurrentPage(1);
-  }, [users.length]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [usersKey]);
 
   const maxFollowers = useMemo(() => {
     const t = maxFollowersInput.trim();
@@ -431,7 +431,7 @@ export const UserTable: React.FC<UserTableProps> = ({
           <div className="w-full bg-amber-200 rounded-full h-1.5">
             <div 
               className="bg-amber-600 h-1.5 rounded-full transition-all duration-300"
-              style={{ width: `${(bulkProgress.current / bulkProgress.total) * 100}%` }}
+              style={{ width: `${bulkProgress.total > 0 ? (bulkProgress.current / bulkProgress.total) * 100 : 0}%` }}
             />
           </div>
         </div>
