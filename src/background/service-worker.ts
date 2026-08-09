@@ -95,33 +95,43 @@ function installUserMetaHookInPage(): { ok: boolean; metaSize: number } {
       }
       const obj = node as Record<string, unknown>;
       const legacy = obj.legacy as Record<string, unknown> | undefined;
-      if (legacy && typeof legacy.screen_name === 'string') {
-        const id = String(legacy.screen_name).toLowerCase();
-        const fc = legacy.followers_count;
-        const fr = legacy.friends_count;
+      if (legacy && (typeof legacy.screen_name === 'string' || typeof legacy.screenName === 'string')) {
+        const id = String(legacy.screen_name || legacy.screenName).toLowerCase();
+        let fc = legacy.followers_count ?? legacy.followersCount;
+        let fr = legacy.friends_count ?? legacy.friendsCount;
+        if (typeof fc === 'string') fc = parseInt(fc, 10);
+        if (typeof fr === 'string') fr = parseInt(fr, 10);
+        
         if (typeof fc === 'number' || typeof fr === 'number') {
           const prev = w.__XRM_META__![id] || {};
           w.__XRM_META__![id] = {
             ...prev,
-            ...(typeof fc === 'number' ? { followersCount: fc } : {}),
-            ...(typeof fr === 'number' ? { followingCount: fr } : {}),
-            ...(typeof legacy.name === 'string'
-              ? { displayName: legacy.name }
-              : {}),
+            ...(typeof fc === 'number' && !isNaN(fc) ? { followersCount: fc } : {}),
+            ...(typeof fr === 'number' && !isNaN(fr) ? { followingCount: fr } : {}),
+            ...(typeof legacy.name === 'string' ? { displayName: legacy.name } : {}),
           };
         }
       }
-      // Bazı payload'larda legacy sarmalanmamış
-      if (typeof obj.screen_name === 'string' && typeof obj.followers_count === 'number') {
-        const id = String(obj.screen_name).toLowerCase();
-        const prev = w.__XRM_META__![id] || {};
-        w.__XRM_META__![id] = {
-          ...prev,
-          followersCount: obj.followers_count as number,
-          ...(typeof obj.friends_count === 'number'
-            ? { followingCount: obj.friends_count as number }
-            : {}),
-        };
+      
+      const objFc = obj.followers_count ?? obj.followersCount;
+      const objFr = obj.friends_count ?? obj.friendsCount;
+      const objSn = obj.screen_name ?? obj.screenName;
+      
+      if (typeof objSn === 'string') {
+        let fc = objFc;
+        let fr = objFr;
+        if (typeof fc === 'string') fc = parseInt(fc, 10);
+        if (typeof fr === 'string') fr = parseInt(fr, 10);
+        
+        if (typeof fc === 'number' && !isNaN(fc)) {
+          const id = String(objSn).toLowerCase();
+          const prev = w.__XRM_META__![id] || {};
+          w.__XRM_META__![id] = {
+            ...prev,
+            followersCount: fc,
+            ...(typeof fr === 'number' && !isNaN(fr) ? { followingCount: fr } : {}),
+          };
+        }
       }
       for (const key of Object.keys(obj)) {
         // Çok büyük binary/string alanları atla
