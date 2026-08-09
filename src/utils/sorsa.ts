@@ -84,12 +84,17 @@ async function fetchPaginated(
   username: string,
   apiKey: string,
   flagField: 'isFollower' | 'isFollowing',
-  onProgress: (fetched: number) => void
+  onProgress: (fetched: number) => void,
+  shouldAbort?: () => boolean
 ): Promise<{ users: Partial<XUser>[]; error?: string }> {
   let cursor: string | null = null;
   const allUsers: Partial<XUser>[] = [];
 
   while (true) {
+    if (shouldAbort && shouldAbort()) {
+      break;
+    }
+    
     let url = `https://api.sorsa.io/v3/${endpoint}?username=${encodeURIComponent(username)}`;
     if (cursor) {
       url += `&next_cursor=${encodeURIComponent(cursor)}`;
@@ -148,14 +153,23 @@ async function fetchPaginated(
 export async function fullScanWithSorsa(
   username: string,
   apiKey: string,
-  onStatusUpdate: (status: string) => void
+  onStatusUpdate: (status: string) => void,
+  shouldAbort?: () => boolean
 ): Promise<SorsaFullScanResult> {
   const cleanUsername = username.replace(/^@/, '');
   
   onStatusUpdate(`Sorsa'dan Takip Edilenler çekiliyor...`);
   const followingResult = await fetchPaginated('follows', cleanUsername, apiKey, 'isFollowing', (count) => {
     onStatusUpdate(`Sorsa'dan Takip Edilenler çekiliyor... (${count})`);
-  });
+  }, shouldAbort);
+  
+  if (shouldAbort && shouldAbort()) {
+    return {
+      success: true,
+      followingUsers: followingResult.users,
+      followersUsers: []
+    };
+  }
   
   if (followingResult.error) {
     return { success: false, followingUsers: [], followersUsers: [], error: `Takip edilenler hatası: ${followingResult.error}` };
@@ -164,7 +178,7 @@ export async function fullScanWithSorsa(
   onStatusUpdate(`Sorsa'dan Takipçiler çekiliyor...`);
   const followersResult = await fetchPaginated('followers', cleanUsername, apiKey, 'isFollower', (count) => {
     onStatusUpdate(`Sorsa'dan Takipçiler çekiliyor... (${count})`);
-  });
+  }, shouldAbort);
   
   if (followersResult.error) {
     return { success: false, followingUsers: followingResult.users, followersUsers: [], error: `Takipçiler hatası: ${followersResult.error}` };

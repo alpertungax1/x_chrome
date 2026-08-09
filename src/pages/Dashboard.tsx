@@ -70,7 +70,7 @@ const Dashboard: React.FC = () => {
           bar.textContent = status;
           document.body.classList.add('xrm-scanning');
         }
-      });
+      }, () => scanAbortRef.current);
       
       if (!result.success) {
         alert(languageRef.current === 'tr' ? `Tarama hatası: ${result.error}` : `Scan error: ${result.error}`);
@@ -833,6 +833,22 @@ const Dashboard: React.FC = () => {
           </div>
         </nav>
 
+        {/* API Key Reset */}
+        <div className="mt-4 pt-4 border-t border-gray-100">
+          <button
+            onClick={() => {
+              if (window.confirm(language === 'tr' ? 'Sorsa API anahtarınızı değiştirmek istediğinize emin misiniz?' : 'Are you sure you want to change your Sorsa API key?')) {
+                localStorage.removeItem('sorsaApiKey');
+                setGlobalApiKey('');
+              }
+            }}
+            className="flex items-center gap-2 w-full px-3 py-2 text-xs font-medium text-gray-500 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+          >
+            <Key size={14} />
+            {language === 'tr' ? 'API Anahtarını Değiştir' : 'Change API Key'}
+          </button>
+        </div>
+
         {/* Dil Seçici */}
         <div className="mt-4 pt-4 border-t border-gray-100">
           <p className="text-xs font-medium text-gray-400 mb-2 pl-1 flex items-center gap-1">
@@ -862,22 +878,6 @@ const Dashboard: React.FC = () => {
             </button>
           </div>
         </div>
-
-        {/* API Key Reset */}
-        <div className="mt-4 pt-4 border-t border-gray-100">
-          <button
-            onClick={() => {
-              if (window.confirm(language === 'tr' ? 'Sorsa API anahtarınızı değiştirmek istediğinize emin misiniz?' : 'Are you sure you want to change your Sorsa API key?')) {
-                localStorage.removeItem('sorsaApiKey');
-                setGlobalApiKey('');
-              }
-            }}
-            className="flex items-center gap-2 w-full px-3 py-2 text-xs font-medium text-gray-500 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
-          >
-            <Key size={14} />
-            {language === 'tr' ? 'API Anahtarını Değiştir' : 'Change API Key'}
-          </button>
-        </div>
       </div>
 
       {/* Main Content */}
@@ -892,7 +892,7 @@ const Dashboard: React.FC = () => {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {isScanning && !sorsaScanActive && (
+            {isScanning && (
               <button
                 type="button"
                 onClick={() => void handleStopScan()}
