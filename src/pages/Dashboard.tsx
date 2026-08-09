@@ -705,19 +705,19 @@ const Dashboard: React.FC = () => {
     };
 
     if (currentView === 'followers') {
-      return <UserTable users={users.filter((u: XUser) => u.isFollower)} title={t.nav.followers} lang={language} {...tableProps} />;
+      return <UserTable key="followers" users={users.filter((u: XUser) => u.isFollower)} title={t.nav.followers} lang={language} {...tableProps} />;
     }
     
     if (currentView === 'following') {
-      return <UserTable users={users.filter((u: XUser) => u.isFollowing)} title={t.nav.following} lang={language} {...tableProps} />;
+      return <UserTable key="following" users={users.filter((u: XUser) => u.isFollowing)} title={t.nav.following} lang={language} {...tableProps} />;
     }
 
     if (currentView === 'notFollowingMe') {
-      return <UserTable users={relationshipAnalyzer.findNotFollowingMe(users)} title={t.nav.notFollowingMe} lang={language} {...tableProps} />;
+      return <UserTable key="notFollowingMe" users={relationshipAnalyzer.findNotFollowingMe(users)} title={t.nav.notFollowingMe} lang={language} {...tableProps} />;
     }
 
     if (currentView === 'mutuals') {
-      return <UserTable users={relationshipAnalyzer.findMutuals(users)} title={t.nav.mutuals} lang={language} {...tableProps} />;
+      return <UserTable key="mutuals" users={relationshipAnalyzer.findMutuals(users)} title={t.nav.mutuals} lang={language} {...tableProps} />;
     }
   };
 

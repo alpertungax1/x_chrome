@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { XUser } from '../types/user';
-import { UserMinus, UserPlus, CheckSquare, Square, MinusSquare, Search, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
+import { UserMinus, UserPlus, CheckSquare, Square, MinusSquare, Search, Loader2, ChevronLeft, ChevronRight, AlertTriangle } from 'lucide-react';
 import { translations, Language } from '../i18n';
 
 const PAGE_SIZE = 50;
@@ -59,6 +59,11 @@ export const UserTable: React.FC<UserTableProps> = ({
     }, 300);
   }, []);
 
+  // Kullanıcı listesi değişince seçimleri temizle (view switch, yeniden tarama vb.)
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [users]);
+
   // Sayfa değiştiğinde seçimleri sıfırla
   useEffect(() => {
     setCurrentPage(1);
@@ -86,6 +91,10 @@ export const UserTable: React.FC<UserTableProps> = ({
     return { known, total: users.length };
   }, [users]);
 
+  // Count filtresi aktif mi?
+  const hasCountFilter = maxFollowers != null || minFollowers != null;
+  // Count filtresi aktifken kaç kullanıcının sayısı bilinmiyor?
+  const unknownCountInFilter = hasCountFilter ? users.filter(u => typeof u.followersCount !== 'number').length : 0;
   // Filtrelenmiş kullanıcılar
   const filteredUsers = useMemo(() => {
     let list = users;
@@ -98,13 +107,11 @@ export const UserTable: React.FC<UserTableProps> = ({
       );
     }
 
-    const hasCountFilter = maxFollowers != null || minFollowers != null;
     if (hasCountFilter) {
       list = list.filter((u) => {
         const c = u.followersCount;
         if (typeof c !== 'number') {
-          // Sayı yoksa: varsayılan gizle (filtre anlamlı kalsın)
-          return !hideUnknownCounts ? true : false;
+          return !hideUnknownCounts;
         }
         if (maxFollowers != null && c >= maxFollowers) return false;
         if (minFollowers != null && c < minFollowers) return false;
@@ -113,7 +120,7 @@ export const UserTable: React.FC<UserTableProps> = ({
     }
 
     return list;
-  }, [users, debouncedQuery, maxFollowers, minFollowers, hideUnknownCounts]);
+  }, [users, debouncedQuery, maxFollowers, minFollowers, hideUnknownCounts, hasCountFilter]);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -324,6 +331,18 @@ export const UserTable: React.FC<UserTableProps> = ({
           )}
         </p>
       </div>
+
+      {/* Count filtresi aktif ama sayılar bilinmiyor uyarısı */}
+      {hasCountFilter && unknownCountInFilter > 0 && (
+        <div className="mx-6 mt-3 mb-1 flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2.5">
+          <AlertTriangle size={14} className="text-amber-500 flex-shrink-0 mt-0.5" />
+          <p className="text-xs text-amber-700 leading-relaxed">
+            {lang === 'tr'
+              ? `${unknownCountInFilter} kullanıcının takipçi sayısı bilinmiyor — bu kullanıcılar filtreye dahil edildi. Sayıya göre filtrelemek için yeniden Tara çalıştırın.`
+              : `${unknownCountInFilter} users have no follower count — they are included in the filter. Run Scan Now to fetch counts.`}
+          </p>
+        </div>
+      )}
 
       {/* Toplu İşlem Barı */}
       {selectedIds.size > 0 && (
