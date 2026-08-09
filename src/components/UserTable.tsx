@@ -122,16 +122,9 @@ export const UserTable: React.FC<UserTableProps> = ({
     return list;
   }, [users, debouncedQuery, maxFollowers, minFollowers, hideUnknownCounts, hasCountFilter]);
 
-  // Sayı filtresi aktive/deaktive edilince hideUnknownCounts'u otomatik güncelle
-  // Filtre aktifse bilinmeyenleri gizle (filtre anlamlı çalışsın)
-  // Filtre kaldırılınca bilinmeyenleri tekrar göster
-  useEffect(() => {
-    if (maxFollowers != null || minFollowers != null) {
-      setHideUnknownCounts(true);
-    } else {
-      setHideUnknownCounts(false);
-    }
-  }, [maxFollowers, minFollowers]);
+  // NOT: X API değişiklikleri nedeniyle takipçi sayıları artık toplu 
+  // listelerde gönderilmemektedir. Bu yüzden kullanıcı sayı filtresi
+  // aktif ettiğinde otomatik olarak bilinmeyenleri GİZLEMİYORUZ (hepsi kaybolmasın diye).
 
   useEffect(() => {
     setCurrentPage(1);
@@ -350,8 +343,8 @@ export const UserTable: React.FC<UserTableProps> = ({
             <AlertTriangle size={14} className="text-amber-500 flex-shrink-0 mt-0.5" />
             <p className="text-xs text-amber-700 leading-relaxed">
               {lang === 'tr'
-                ? `${unknownCountInFilter} kullanıcı gizlendi (takipçi sayısı bilinmiyor). Yeniden Tara çalıştırarak sayıları çekebilirsiniz.`
-                : `${unknownCountInFilter} users hidden (no follower count). Run Scan Now to fetch counts.`}
+                ? `${unknownCountInFilter} kullanıcı gizlendi (takipçi sayısı bilinmiyor). X'in son API sınırlandırmaları nedeniyle toplu taramalarda takipçi sayıları artık çekilememektedir (sadece profiline girilenlerin sayısı alınabilir).`
+                : `${unknownCountInFilter} users hidden (no follower count). Due to X's recent API limits, bulk follower counts can no longer be fetched.`}
             </p>
           </div>
           <button
