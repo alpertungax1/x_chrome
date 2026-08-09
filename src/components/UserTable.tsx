@@ -15,6 +15,14 @@ interface UserTableProps {
   bulkProgress?: { current: number; total: number } | null;
 }
 
+function formatCount(n: number | undefined): string {
+  if (n == null || !Number.isFinite(n)) return '—';
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+  if (n >= 10_000) return `${Math.round(n / 1000)}K`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1).replace(/\.0$/, '')}K`;
+  return String(n);
+}
+
 export const UserTable: React.FC<UserTableProps> = ({ 
   users, 
   title, 
@@ -28,6 +36,10 @@ export const UserTable: React.FC<UserTableProps> = ({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
+  /** Max takipçi: bu sayıdan AZ olanlar (ör. 500 → 0–499) */
+  const [maxFollowersInput, setMaxFollowersInput] = useState('');
+  const [minFollowersInput, setMinFollowersInput] = useState('');
+  const [hideUnknownCounts, setHideUnknownCounts] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -48,15 +60,60 @@ export const UserTable: React.FC<UserTableProps> = ({
     setCurrentPage(1);
   }, [users.length]);
 
+  const maxFollowers = useMemo(() => {
+    const t = maxFollowersInput.trim();
+    if (!t) return null;
+    const n = parseInt(t.replace(/[^\d]/g, ''), 10);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  }, [maxFollowersInput]);
+
+  const minFollowers = useMemo(() => {
+    const t = minFollowersInput.trim();
+    if (!t) return null;
+    const n = parseInt(t.replace(/[^\d]/g, ''), 10);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  }, [minFollowersInput]);
+
+  const countStats = useMemo(() => {
+    let known = 0;
+    for (const u of users) {
+      if (typeof u.followersCount === 'number') known++;
+    }
+    return { known, total: users.length };
+  }, [users]);
+
   // Filtrelenmiş kullanıcılar
   const filteredUsers = useMemo(() => {
-    if (!debouncedQuery.trim()) return users;
-    const q = debouncedQuery.toLowerCase();
-    return users.filter(u => 
-      u.username.toLowerCase().includes(q) || 
-      u.displayName.toLowerCase().includes(q)
-    );
-  }, [users, debouncedQuery]);
+    let list = users;
+    if (debouncedQuery.trim()) {
+      const q = debouncedQuery.toLowerCase();
+      list = list.filter(
+        (u) =>
+          u.username.toLowerCase().includes(q) ||
+          u.displayName.toLowerCase().includes(q)
+      );
+    }
+
+    const hasCountFilter = maxFollowers != null || minFollowers != null;
+    if (hasCountFilter) {
+      list = list.filter((u) => {
+        const c = u.followersCount;
+        if (typeof c !== 'number') {
+          // Sayı yoksa: varsayılan gizle (filtre anlamlı kalsın)
+          return !hideUnknownCounts ? true : false;
+        }
+        if (maxFollowers != null && c >= maxFollowers) return false;
+        if (minFollowers != null && c < minFollowers) return false;
+        return true;
+      });
+    }
+
+    return list;
+  }, [users, debouncedQuery, maxFollowers, minFollowers, hideUnknownCounts]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [maxFollowers, minFollowers, hideUnknownCounts, debouncedQuery]);
 
   // Sayfalama
   const totalPages = Math.max(1, Math.ceil(filteredUsers.length / PAGE_SIZE));
@@ -67,6 +124,8 @@ export const UserTable: React.FC<UserTableProps> = ({
 
   const allPageSelected = paginatedUsers.length > 0 && paginatedUsers.every(u => selectedIds.has(u.id));
   const someSelected = paginatedUsers.some(u => selectedIds.has(u.id));
+  const allFilteredSelected =
+    filteredUsers.length > 0 && filteredUsers.every((u) => selectedIds.has(u.id));
 
   const toggleSelectAll = () => {
     if (allPageSelected) {
@@ -80,6 +139,14 @@ export const UserTable: React.FC<UserTableProps> = ({
       setSelectedIds(newSet);
     }
   };
+
+  const selectAllFiltered = () => {
+    const newSet = new Set(selectedIds);
+    filteredUsers.forEach((u) => newSet.add(u.id));
+    setSelectedIds(newSet);
+  };
+
+  const clearSelection = () => setSelectedIds(new Set());
 
   const toggleSelect = (id: string) => {
     const newSet = new Set(selectedIds);
@@ -123,10 +190,11 @@ export const UserTable: React.FC<UserTableProps> = ({
         <div className="flex justify-between items-center mb-4">
           <h3 className="text-lg font-bold text-gray-900">{title}</h3>
           <span className="bg-gray-100 text-gray-700 text-sm font-medium px-3 py-1 rounded-full">
-            {filteredUsers.length} Kullanıcı
+            {filteredUsers.length}
+            {filteredUsers.length !== users.length ? ` / ${users.length}` : ''} Kullanıcı
           </span>
         </div>
-        <div className="relative">
+        <div className="relative mb-3">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
           <input
             type="text"
@@ -136,6 +204,89 @@ export const UserTable: React.FC<UserTableProps> = ({
             className="w-full pl-9 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
           />
         </div>
+
+        {/* Takipçi sayısı filtresi */}
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-gray-500">Min. takipçi</span>
+            <input
+              type="number"
+              min={0}
+              inputMode="numeric"
+              placeholder="ör. 0"
+              value={minFollowersInput}
+              onChange={(e) => setMinFollowersInput(e.target.value)}
+              className="w-28 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-gray-500">
+              Maks. takipçi (bundan az)
+            </span>
+            <input
+              type="number"
+              min={0}
+              inputMode="numeric"
+              placeholder="ör. 500"
+              value={maxFollowersInput}
+              onChange={(e) => setMaxFollowersInput(e.target.value)}
+              className="w-28 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+            />
+          </label>
+          {(maxFollowers != null || minFollowers != null) && (
+            <label className="flex items-center gap-2 pb-2 text-xs text-gray-600 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={hideUnknownCounts}
+                onChange={(e) => setHideUnknownCounts(e.target.checked)}
+                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              Sayısı bilinmeyenleri gizle
+            </label>
+          )}
+          {(maxFollowers != null || minFollowers != null || maxFollowersInput || minFollowersInput) && (
+            <button
+              type="button"
+              onClick={() => {
+                setMaxFollowersInput('');
+                setMinFollowersInput('');
+              }}
+              className="pb-2 text-xs font-medium text-blue-600 hover:text-blue-800"
+            >
+              Filtreyi temizle
+            </button>
+          )}
+          {filteredUsers.length > 0 && !allFilteredSelected && (
+            <button
+              type="button"
+              onClick={selectAllFiltered}
+              className="pb-2 text-xs font-medium text-gray-700 hover:text-gray-900 underline-offset-2 hover:underline"
+            >
+              Filtrelenenlerin tümünü seç ({filteredUsers.length})
+            </button>
+          )}
+          {allFilteredSelected && filteredUsers.length > 0 && (
+            <button
+              type="button"
+              onClick={clearSelection}
+              className="pb-2 text-xs font-medium text-gray-700 hover:text-gray-900"
+            >
+              Seçimi kaldır
+            </button>
+          )}
+        </div>
+        <p className="mt-2 text-xs text-gray-400">
+          Takipçi sayısı tarama sırasında GraphQL’den alınır.
+          {countStats.total > 0 && (
+            <>
+              {' '}
+              Bu listede {countStats.known}/{countStats.total} kişide sayı var
+              {countStats.known === 0
+                ? ' — filtre için yeniden Scan Now çalıştır.'
+                : '.'}
+            </>
+          )}
+        </p>
       </div>
 
       {/* Toplu İşlem Barı */}
@@ -206,6 +357,7 @@ export const UserTable: React.FC<UserTableProps> = ({
                 </button>
               </th>
               <th className="px-4 py-4">Kullanıcı</th>
+              <th className="px-4 py-4 whitespace-nowrap">Takipçi</th>
               <th className="px-4 py-4">Durum</th>
               <th className="px-4 py-4 text-right">İşlem</th>
             </tr>
@@ -213,8 +365,10 @@ export const UserTable: React.FC<UserTableProps> = ({
           <tbody className="divide-y divide-gray-100">
             {paginatedUsers.length === 0 ? (
               <tr>
-                <td colSpan={4} className="px-6 py-8 text-center text-gray-500">
-                  {searchQuery ? 'Aramanızla eşleşen kullanıcı bulunamadı.' : 'Bu listede gösterilecek kimse yok.'}
+                <td colSpan={5} className="px-6 py-8 text-center text-gray-500">
+                  {searchQuery || maxFollowers != null || minFollowers != null
+                    ? 'Filtreyle eşleşen kullanıcı yok.'
+                    : 'Bu listede gösterilecek kimse yok.'}
                 </td>
               </tr>
             ) : (
@@ -251,6 +405,17 @@ export const UserTable: React.FC<UserTableProps> = ({
                           </a>
                         </div>
                       </div>
+                    </td>
+                    <td className="px-4 py-3 tabular-nums text-sm text-gray-700 whitespace-nowrap">
+                      {typeof user.followersCount === 'number' ? (
+                        <span title={String(user.followersCount)}>
+                          {formatCount(user.followersCount)}
+                        </span>
+                      ) : (
+                        <span className="text-gray-300" title="Tarama sırasında alınamadı">
+                          —
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap gap-1.5">

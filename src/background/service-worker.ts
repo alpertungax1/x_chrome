@@ -15,6 +15,8 @@ interface ScrapedUser {
   firstSeenAt: number;
   lastSeenAt: number;
   avatarUrl?: string;
+  followersCount?: number;
+  followingCount?: number;
 }
 
 interface ActiveScan {
@@ -59,7 +61,139 @@ function slimUsers(users: ScrapedUser[]): ScrapedUser[] {
     isFollower: u.isFollower,
     firstSeenAt: u.firstSeenAt,
     lastSeenAt: u.lastSeenAt,
+    ...(typeof u.followersCount === 'number'
+      ? { followersCount: u.followersCount }
+      : {}),
+    ...(typeof u.followingCount === 'number'
+      ? { followingCount: u.followingCount }
+      : {}),
   }));
+}
+
+/**
+ * X GraphQL yanıtlarından followers_count yakala.
+ * Liste DOM'unda sayı yok; API yanıtında legacy.followers_count var.
+ */
+function installUserMetaHookInPage(): { ok: boolean; metaSize: number } {
+  const w = window as Window & {
+    __XRM_META__?: Record<
+      string,
+      { followersCount?: number; followingCount?: number; displayName?: string }
+    >;
+    __XRM_HOOK__?: boolean;
+  };
+
+  if (!w.__XRM_META__) w.__XRM_META__ = {};
+
+  const ingest = (root: unknown) => {
+    const walk = (node: unknown, depth: number) => {
+      if (!node || depth > 40) return;
+      if (typeof node !== 'object') return;
+      if (Array.isArray(node)) {
+        for (const item of node) walk(item, depth + 1);
+        return;
+      }
+      const obj = node as Record<string, unknown>;
+      const legacy = obj.legacy as Record<string, unknown> | undefined;
+      if (legacy && typeof legacy.screen_name === 'string') {
+        const id = String(legacy.screen_name).toLowerCase();
+        const fc = legacy.followers_count;
+        const fr = legacy.friends_count;
+        if (typeof fc === 'number' || typeof fr === 'number') {
+          const prev = w.__XRM_META__![id] || {};
+          w.__XRM_META__![id] = {
+            ...prev,
+            ...(typeof fc === 'number' ? { followersCount: fc } : {}),
+            ...(typeof fr === 'number' ? { followingCount: fr } : {}),
+            ...(typeof legacy.name === 'string'
+              ? { displayName: legacy.name }
+              : {}),
+          };
+        }
+      }
+      // Bazı payload'larda legacy sarmalanmamış
+      if (typeof obj.screen_name === 'string' && typeof obj.followers_count === 'number') {
+        const id = String(obj.screen_name).toLowerCase();
+        const prev = w.__XRM_META__![id] || {};
+        w.__XRM_META__![id] = {
+          ...prev,
+          followersCount: obj.followers_count as number,
+          ...(typeof obj.friends_count === 'number'
+            ? { followingCount: obj.friends_count as number }
+            : {}),
+        };
+      }
+      for (const key of Object.keys(obj)) {
+        // Çok büyük binary/string alanları atla
+        if (key === 'profile_image_url_https' || key === 'description') continue;
+        walk(obj[key], depth + 1);
+      }
+    };
+    walk(root, 0);
+  };
+
+  if (!w.__XRM_HOOK__) {
+    w.__XRM_HOOK__ = true;
+    const origFetch = window.fetch.bind(window);
+    window.fetch = async (...args: Parameters<typeof fetch>) => {
+      const res = await origFetch(...args);
+      try {
+        const req = args[0];
+        const url =
+          typeof req === 'string'
+            ? req
+            : req instanceof Request
+              ? req.url
+              : String(req ?? '');
+        if (
+          /graphql|Followers|Following|UserBy|UserResult|BlueVerified/i.test(url)
+        ) {
+          const clone = res.clone();
+          void clone
+            .json()
+            .then((data) => ingest(data))
+            .catch(() => {});
+        }
+      } catch {
+        // ignore
+      }
+      return res;
+    };
+
+    const XO = XMLHttpRequest.prototype.open;
+    const XS = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function (
+      method: string,
+      url: string | URL,
+      ...rest: unknown[]
+    ) {
+      (this as XMLHttpRequest & { __xrmUrl?: string }).__xrmUrl = String(url);
+      return XO.apply(this, [method, url, ...rest] as never);
+    };
+    XMLHttpRequest.prototype.send = function (
+      ...args: Parameters<typeof XMLHttpRequest.prototype.send>
+    ) {
+      this.addEventListener('load', function () {
+        try {
+          const url = (this as XMLHttpRequest & { __xrmUrl?: string }).__xrmUrl || '';
+          if (!/graphql|Followers|Following|UserBy|UserResult/i.test(url)) return;
+          if (this.responseType && this.responseType !== 'text') return;
+          const text = this.responseText;
+          if (!text || text.length < 20 || text.length > 8_000_000) return;
+          if (text[0] !== '{' && text[0] !== '[') return;
+          ingest(JSON.parse(text));
+        } catch {
+          // ignore
+        }
+      });
+      return XS.apply(this, args);
+    };
+  }
+
+  return {
+    ok: true,
+    metaSize: Object.keys(w.__XRM_META__).length,
+  };
 }
 
 chrome.runtime.onConnect.addListener((port) => {
@@ -164,9 +298,12 @@ function scrapeAndScrollInPage(): {
     isFollowing: boolean;
     isFollower: boolean;
     avatarUrl?: string;
+    followersCount?: number;
+    followingCount?: number;
   }>;
   expected: number | null;
   cellCount: number;
+  metaSize: number;
 } {
   const skip = new Set([
     'home', 'explore', 'search', 'notifications', 'messages', 'settings', 'i',
@@ -230,9 +367,20 @@ function scrapeAndScrollInPage(): {
     isFollowing: boolean;
     isFollower: boolean;
     avatarUrl?: string;
+    followersCount?: number;
+    followingCount?: number;
   }> = [];
   const seen = new Set<string>();
   const cells = document.querySelectorAll('[data-testid="UserCell"]');
+  const meta =
+    (
+      window as Window & {
+        __XRM_META__?: Record<
+          string,
+          { followersCount?: number; followingCount?: number; displayName?: string }
+        >;
+      }
+    ).__XRM_META__ || {};
 
   cells.forEach((cell) => {
     const links = cell.querySelectorAll('a[href]');
@@ -267,6 +415,11 @@ function scrapeAndScrollInPage(): {
       'img[src*="profile_images"]'
     ) as HTMLImageElement | null;
 
+    const m = meta[id];
+    if (m?.displayName && displayName === username) {
+      displayName = m.displayName;
+    }
+
     found.push({
       id,
       username,
@@ -274,6 +427,12 @@ function scrapeAndScrollInPage(): {
       isFollowing,
       isFollower,
       avatarUrl: avatarImg?.src,
+      ...(typeof m?.followersCount === 'number'
+        ? { followersCount: m.followersCount }
+        : {}),
+      ...(typeof m?.followingCount === 'number'
+        ? { followingCount: m.followingCount }
+        : {}),
     });
   });
 
@@ -304,6 +463,7 @@ function scrapeAndScrollInPage(): {
     users: found,
     expected: readExpected(),
     cellCount: cells.length,
+    metaSize: Object.keys(meta).length,
   };
 }
 
@@ -500,9 +660,12 @@ async function runScanTick() {
         isFollowing: boolean;
         isFollower: boolean;
         avatarUrl?: string;
+        followersCount?: number;
+        followingCount?: number;
       }>;
       expected: number | null;
       cellCount: number;
+      metaSize?: number;
     } | null = null;
 
     try {
@@ -532,6 +695,7 @@ async function runScanTick() {
 
     const now = Date.now();
     let added = 0;
+    let withCounts = 0;
     for (const u of pageResult.users) {
       if (!u?.id) continue;
       if (!active.users.has(u.id)) {
@@ -548,9 +712,20 @@ async function runScanTick() {
           ...u,
           isFollowing: prev.isFollowing || u.isFollowing,
           isFollower: prev.isFollower || u.isFollower,
+          followersCount:
+            typeof u.followersCount === 'number'
+              ? u.followersCount
+              : prev.followersCount,
+          followingCount:
+            typeof u.followingCount === 'number'
+              ? u.followingCount
+              : prev.followingCount,
           lastSeenAt: now,
         });
       }
+    }
+    for (const u of active.users.values()) {
+      if (typeof u.followersCount === 'number') withCounts++;
     }
 
     if (pageResult.expected != null) active.expected = pageResult.expected;
@@ -566,7 +741,7 @@ async function runScanTick() {
     const ratio =
       expected && expected > 0 ? active.users.size / expected : null;
     const pct = ratio != null ? `${Math.round(ratio * 100)}%` : '?';
-    const debug = `SW#${active.tick} | +${added} | DOM:${pageResult.cellCount} | hedef:${expected ?? '?'} | ${pct} | durgun:${Math.round(noGrowthMs / 1000)}s`;
+    const debug = `SW#${active.tick} | +${added} | DOM:${pageResult.cellCount} | hedef:${expected ?? '?'} | ${pct} | sayı:${withCounts} | meta:${pageResult.metaSize ?? 0} | durgun:${Math.round(noGrowthMs / 1000)}s`;
 
     if (added > 0 || active.tick % 2 === 0) {
       await publishProgress(debug);
@@ -657,6 +832,14 @@ function beginScanSession(tabId: number, scanId: string) {
   if (active && !active.finishing && active.scanId === scanId && active.tabId === tabId) {
     console.log('Scan session already active, ignore duplicate begin', scanId);
     ensureScanDriver();
+    // Hook yeniden dene (SPA navigasyon sonrası)
+    void chrome.scripting
+      .executeScript({
+        target: { tabId },
+        world: 'MAIN',
+        func: installUserMetaHookInPage,
+      })
+      .catch(() => {});
     return;
   }
 
@@ -681,6 +864,20 @@ function beginScanSession(tabId: number, scanId: string) {
     finishing: false,
     tickRunning: false,
   };
+
+  // GraphQL'den followers_count yakalamak için fetch/XHR hook
+  void chrome.scripting
+    .executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: installUserMetaHookInPage,
+    })
+    .then((r) => {
+      console.log('User meta hook installed', r?.[0]?.result);
+    })
+    .catch((err) => {
+      console.warn('User meta hook failed', err);
+    });
 
   ensureScanDriver();
   console.log('Scan session begin', { tabId, scanId });

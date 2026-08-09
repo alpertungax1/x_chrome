@@ -131,6 +131,14 @@ export function mergeScanUsers(
       displayName: user.displayName || prev?.displayName || user.username || id,
       isFollowing: Boolean(prev?.isFollowing || user.isFollowing || defaults.isFollowing),
       isFollower: Boolean(prev?.isFollower || user.isFollower || defaults.isFollower),
+      followersCount:
+        typeof user.followersCount === 'number'
+          ? user.followersCount
+          : prev?.followersCount,
+      followingCount:
+        typeof user.followingCount === 'number'
+          ? user.followingCount
+          : prev?.followingCount,
     });
   };
 
