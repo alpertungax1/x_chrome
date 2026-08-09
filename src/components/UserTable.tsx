@@ -43,7 +43,7 @@ export const UserTable: React.FC<UserTableProps> = ({
   /** Max takipçi: bu sayıdan AZ olanlar (ör. 500 → 0–499) */
   const [maxFollowersInput, setMaxFollowersInput] = useState('');
   const [minFollowersInput, setMinFollowersInput] = useState('');
-  const [hideUnknownCounts, setHideUnknownCounts] = useState(true);
+  const [hideUnknownCounts, setHideUnknownCounts] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -225,7 +225,7 @@ export const UserTable: React.FC<UserTableProps> = ({
                   } else {
                     setMaxFollowersInput(String(n));
                     setMinFollowersInput('');
-                    setHideUnknownCounts(true);
+                    // hideUnknownCounts'u zorla değiştirme: kullanıcı elle seçer
                   }
                 }}
                 className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
