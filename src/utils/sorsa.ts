@@ -129,12 +129,13 @@ async function fetchPaginated(
       }
 
       onProgress(allUsers.length);
-      cursor = data.next_cursor;
+      const nextCursor = data.next_cursor;
       
-      if (!cursor || users.length === 0) {
-        break; // Bitti
+      if (!nextCursor || nextCursor === '0' || nextCursor === 0 || nextCursor === '-1' || nextCursor === cursor || users.length === 0) {
+        break; // Bitti veya sonsuz döngü engellendi
       }
-
+      
+      cursor = nextCursor;
       await new Promise((resolve) => setTimeout(resolve, 300));
     } catch (err: any) {
       return { users: allUsers, error: err.message || 'Network error' };
