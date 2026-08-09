@@ -45,6 +45,7 @@ interface AppState {
   applyUnfollow: (username: string) => Promise<void>;
   setLoading: (loading: boolean) => void;
   setCurrentSession: (session: ScanSession | null) => void;
+  updateUsersBatch: (users: Partial<XUser>[]) => Promise<void>;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -144,6 +145,15 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setLoading: (loading) => set({ isLoading: loading }),
   setCurrentSession: (session) => set({ currentSession: session }),
+
+  updateUsersBatch: async (updates) => {
+    await userRepository.saveBatch(updates);
+    const allUsers = await userRepository.getAll();
+    set({
+      users: allUsers,
+      stats: computeStats(allUsers),
+    });
+  },
 }));
 
 // Kayıtlı dil tercihini chrome.storage.sync'ten async yükle (store oluşturulduktan sonra)

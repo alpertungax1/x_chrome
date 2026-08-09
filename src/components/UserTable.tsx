@@ -1,7 +1,8 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { XUser } from '../types/user';
-import { UserMinus, UserPlus, CheckSquare, Square, MinusSquare, Search, Loader2, ChevronLeft, ChevronRight, AlertTriangle } from 'lucide-react';
+import { UserMinus, UserPlus, CheckSquare, Square, MinusSquare, Search, Loader2, ChevronLeft, ChevronRight, AlertTriangle, Key } from 'lucide-react';
 import { translations, Language } from '../i18n';
+import { useAppStore } from '../store/app-store';
 
 const PAGE_SIZE = 50;
 
@@ -46,6 +47,51 @@ export const UserTable: React.FC<UserTableProps> = ({
   const [hideUnknownCounts, setHideUnknownCounts] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { updateUsersBatch } = useAppStore();
+
+  const [sorsaApiKey, setSorsaApiKey] = useState(() => localStorage.getItem('sorsaApiKey') || '');
+  const [sorsaLoading, setSorsaLoading] = useState(false);
+  const [sorsaProgress, setSorsaProgress] = useState<{ fetched: number; total: number } | null>(null);
+  const [sorsaError, setSorsaError] = useState('');
+  const [showSorsaInput, setShowSorsaInput] = useState(false);
+
+  const handleFetchWithSorsa = async () => {
+    if (!sorsaApiKey) {
+      setShowSorsaInput(true);
+      return;
+    }
+    localStorage.setItem('sorsaApiKey', sorsaApiKey);
+    
+    const unknownUsers = users.filter(u => typeof u.followersCount !== 'number');
+    if (unknownUsers.length === 0) return;
+    
+    const usernames = unknownUsers.map(u => u.username);
+    setSorsaLoading(true);
+    setSorsaError('');
+    setSorsaProgress({ fetched: 0, total: usernames.length });
+    
+    try {
+      const { fetchFollowerCounts } = await import('../utils/sorsa');
+      const result = await fetchFollowerCounts(usernames, sorsaApiKey, (fetched, total) => {
+        setSorsaProgress({ fetched, total });
+      });
+      
+      if (result.updates.length > 0) {
+        await updateUsersBatch(result.updates);
+      }
+      
+      if (!result.success) {
+        setSorsaError(result.error || 'API Error');
+      } else {
+        setShowSorsaInput(false);
+      }
+    } catch (e: any) {
+      setSorsaError(e.message || 'Error occurred');
+    } finally {
+      setSorsaLoading(false);
+      setTimeout(() => setSorsaProgress(null), 2000);
+    }
+  };
 
   // Debounced arama (300ms)
   const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -338,39 +384,127 @@ export const UserTable: React.FC<UserTableProps> = ({
 
       {/* Count filtresi aktif ve bilinmeyenler gizli uyarısı */}
       {hasCountFilter && unknownCountInFilter > 0 && hideUnknownCounts && (
-        <div className="mx-6 mt-3 mb-1 flex items-center justify-between gap-2 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2.5">
-          <div className="flex items-start gap-2">
-            <AlertTriangle size={14} className="text-amber-500 flex-shrink-0 mt-0.5" />
-            <p className="text-xs text-amber-700 leading-relaxed">
-              {lang === 'tr'
-                ? `${unknownCountInFilter} kullanıcı gizlendi (takipçi sayısı bilinmiyor). X'in son API sınırlandırmaları nedeniyle toplu taramalarda takipçi sayıları artık çekilememektedir (sadece profiline girilenlerin sayısı alınabilir).`
-                : `${unknownCountInFilter} users hidden (no follower count). Due to X's recent API limits, bulk follower counts can no longer be fetched.`}
-            </p>
+        <div className="mx-6 mt-3 mb-1 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2.5">
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex items-start gap-2">
+              <AlertTriangle size={14} className="text-amber-500 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-xs text-amber-700 leading-relaxed">
+                  {lang === 'tr'
+                    ? `${unknownCountInFilter} kullanıcı gizlendi (takipçi sayısı bilinmiyor). X'in son API sınırlandırmaları nedeniyle toplu taramalarda takipçi sayıları artık çekilememektedir.`
+                    : `${unknownCountInFilter} users hidden (no follower count). Due to X's recent API limits, bulk follower counts can no longer be fetched.`}
+                </p>
+                {sorsaError && <p className="text-xs text-red-600 mt-1 font-medium">{sorsaError}</p>}
+                
+                {showSorsaInput && !sorsaLoading && (
+                  <div className="mt-2 flex items-center gap-2">
+                    <Key size={14} className="text-amber-600" />
+                    <input
+                      type="text"
+                      placeholder="Sorsa API Key (örn: 4b2ec005-...)"
+                      value={sorsaApiKey}
+                      onChange={(e) => setSorsaApiKey(e.target.value)}
+                      className="text-xs px-2 py-1 border border-amber-300 rounded focus:outline-none focus:border-amber-500 w-64"
+                    />
+                    <button
+                      onClick={handleFetchWithSorsa}
+                      className="text-xs px-3 py-1 bg-amber-600 text-white rounded hover:bg-amber-700 font-medium"
+                    >
+                      {lang === 'tr' ? 'Başlat' : 'Start'}
+                    </button>
+                    <button
+                      onClick={() => setShowSorsaInput(false)}
+                      className="text-xs px-2 py-1 text-amber-700 hover:text-amber-900"
+                    >
+                      {lang === 'tr' ? 'İptal' : 'Cancel'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="flex flex-col items-end gap-2">
+              <button
+                type="button"
+                onClick={() => setHideUnknownCounts(false)}
+                className="flex-shrink-0 text-xs font-medium text-amber-700 underline hover:text-amber-900 whitespace-nowrap"
+              >
+                {lang === 'tr' ? 'Hepsini göster' : 'Show all'}
+              </button>
+              {!showSorsaInput && (
+                <button
+                  type="button"
+                  onClick={handleFetchWithSorsa}
+                  disabled={sorsaLoading}
+                  className="flex-shrink-0 text-xs font-medium bg-amber-100 text-amber-800 px-3 py-1.5 rounded border border-amber-300 hover:bg-amber-200 whitespace-nowrap flex items-center gap-1 disabled:opacity-50"
+                >
+                  {sorsaLoading && <Loader2 size={12} className="animate-spin" />}
+                  {sorsaLoading && sorsaProgress
+                    ? `${lang === 'tr' ? 'Çekiliyor' : 'Fetching'} (${sorsaProgress.fetched}/${sorsaProgress.total})`
+                    : lang === 'tr' ? 'Sorsa API ile Sayıları Çek' : 'Fetch with Sorsa API'}
+                </button>
+              )}
+            </div>
           </div>
-          <button
-            type="button"
-            onClick={() => setHideUnknownCounts(false)}
-            className="flex-shrink-0 text-xs font-medium text-amber-700 underline hover:text-amber-900 whitespace-nowrap"
-          >
-            {lang === 'tr' ? 'Hepsini göster' : 'Show all'}
-          </button>
         </div>
       )}
       {/* Count filtresi aktif ama bilinmeyenler gösteriliyorsa bilgi */}
       {hasCountFilter && unknownCountInFilter > 0 && !hideUnknownCounts && (
         <div className="mx-6 mt-3 mb-1 flex items-center justify-between gap-2 bg-blue-50 border border-blue-200 rounded-lg px-4 py-2.5">
-          <p className="text-xs text-blue-700">
-            {lang === 'tr'
-              ? `${unknownCountInFilter} kullanıcının sayısı bilinmiyor — filtre dışı gösteriliyor.`
-              : `${unknownCountInFilter} users have unknown counts — shown outside filter.`}
-          </p>
-          <button
-            type="button"
-            onClick={() => setHideUnknownCounts(true)}
-            className="flex-shrink-0 text-xs font-medium text-blue-700 underline hover:text-blue-900 whitespace-nowrap"
-          >
-            {lang === 'tr' ? 'Gizle' : 'Hide'}
-          </button>
+          <div>
+            <p className="text-xs text-blue-700">
+              {lang === 'tr'
+                ? `${unknownCountInFilter} kullanıcının sayısı bilinmiyor — filtre dışı gösteriliyor.`
+                : `${unknownCountInFilter} users have unknown counts — shown outside filter.`}
+            </p>
+            {sorsaError && <p className="text-xs text-red-600 mt-1 font-medium">{sorsaError}</p>}
+            
+            {showSorsaInput && !sorsaLoading && (
+              <div className="mt-2 flex items-center gap-2">
+                <Key size={14} className="text-blue-600" />
+                <input
+                  type="text"
+                  placeholder="Sorsa API Key (örn: 4b2ec005-...)"
+                  value={sorsaApiKey}
+                  onChange={(e) => setSorsaApiKey(e.target.value)}
+                  className="text-xs px-2 py-1 border border-blue-300 rounded focus:outline-none focus:border-blue-500 w-64"
+                />
+                <button
+                  onClick={handleFetchWithSorsa}
+                  className="text-xs px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 font-medium"
+                >
+                  {lang === 'tr' ? 'Başlat' : 'Start'}
+                </button>
+                <button
+                  onClick={() => setShowSorsaInput(false)}
+                  className="text-xs px-2 py-1 text-blue-700 hover:text-blue-900"
+                >
+                  {lang === 'tr' ? 'İptal' : 'Cancel'}
+                </button>
+              </div>
+            )}
+          </div>
+          <div className="flex flex-col items-end gap-2">
+            <button
+              type="button"
+              onClick={() => setHideUnknownCounts(true)}
+              className="flex-shrink-0 text-xs font-medium text-blue-700 underline hover:text-blue-900 whitespace-nowrap"
+            >
+              {lang === 'tr' ? 'Sadece sayıları bilinenleri filtrele' : 'Only filter known counts'}
+            </button>
+            {!showSorsaInput && (
+              <button
+                type="button"
+                onClick={handleFetchWithSorsa}
+                disabled={sorsaLoading}
+                className="flex-shrink-0 text-xs font-medium bg-blue-100 text-blue-800 px-3 py-1.5 rounded border border-blue-300 hover:bg-blue-200 whitespace-nowrap flex items-center gap-1 disabled:opacity-50"
+              >
+                {sorsaLoading && <Loader2 size={12} className="animate-spin" />}
+                {sorsaLoading && sorsaProgress
+                  ? `${lang === 'tr' ? 'Çekiliyor' : 'Fetching'} (${sorsaProgress.fetched}/${sorsaProgress.total})`
+                  : lang === 'tr' ? 'Sorsa API ile Sayıları Çek' : 'Fetch with Sorsa API'}
+              </button>
+            )}
+          </div>
         </div>
       )}
 

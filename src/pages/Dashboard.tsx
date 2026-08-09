@@ -38,6 +38,68 @@ const Dashboard: React.FC = () => {
   // Aksiyon state'leri
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
   const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number } | null>(null);
+  const [sorsaScanActive, setSorsaScanActive] = useState(false);
+
+  const handleSorsaFullScan = async () => {
+    let apiKey = localStorage.getItem('sorsaApiKey') || '';
+    if (!apiKey) {
+      apiKey = window.prompt(languageRef.current === 'tr' ? 'Lütfen Sorsa API Key giriniz:' : 'Please enter Sorsa API Key:') || '';
+      if (!apiKey) return;
+      localStorage.setItem('sorsaApiKey', apiKey);
+    }
+    
+    const username = window.prompt(languageRef.current === 'tr' ? 'Kendi kullanıcı adınızı giriniz (başında @ olmadan):' : 'Enter your username (without @):');
+    if (!username) return;
+
+    setSorsaScanActive(true);
+    setIsScanning(true);
+    scanSessionActiveRef.current = true;
+    scanAbortRef.current = false;
+    
+    try {
+      const { fullScanWithSorsa } = await import('../utils/sorsa');
+      const result = await fullScanWithSorsa(username, apiKey, (status) => {
+        setScanStatus(status);
+        lastProgressTextRef.current = status;
+        document.title = `${status} · X Manager`;
+        
+        const bar = document.getElementById('xrm-scan-live');
+        if (bar) {
+          bar.style.display = 'block';
+          bar.textContent = status;
+          document.body.classList.add('xrm-scanning');
+        }
+      });
+      
+      if (!result.success) {
+        alert(languageRef.current === 'tr' ? `Tarama hatası: ${result.error}` : `Scan error: ${result.error}`);
+        return;
+      }
+      
+      setScanStatus(languageRef.current === 'tr' ? 'Veritabanı güncelleniyor...' : 'Updating database...');
+      const { mergeWithScan } = useAppStore.getState();
+      await mergeWithScan(result.followingUsers, result.followersUsers, {
+        followingComplete: true,
+        followersComplete: true
+      });
+      
+      alert(languageRef.current === 'tr' ? 'Sorsa API ile tam tarama tamamlandı!' : 'Full scan with Sorsa API completed!');
+    } catch (e: any) {
+      alert(languageRef.current === 'tr' ? `Beklenmeyen Hata: ${e.message}` : `Unexpected Error: ${e.message}`);
+    } finally {
+      setSorsaScanActive(false);
+      setIsScanning(false);
+      scanSessionActiveRef.current = false;
+      document.title = 'X Relationship Manager';
+      setScanStatus('');
+      
+      const bar = document.getElementById('xrm-scan-live');
+      if (bar) {
+        bar.style.display = 'none';
+        document.body.classList.remove('xrm-scanning');
+      }
+    }
+  };
 
   const applyScanProgress = useCallback((payload: {
     foundUsersCount?: number;
@@ -802,7 +864,7 @@ const Dashboard: React.FC = () => {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {isScanning && (
+            {isScanning && !sorsaScanActive && (
               <button
                 type="button"
                 onClick={() => void handleStopScan()}
@@ -812,6 +874,18 @@ const Dashboard: React.FC = () => {
                 {t.stop}
               </button>
             )}
+            <button
+              type="button"
+              onClick={() => void handleSorsaFullScan()}
+              disabled={isScanning || !!actionInProgress}
+              className={`px-5 py-2.5 rounded-lg font-medium transition-colors shadow-sm ${
+                isScanning || actionInProgress
+                  ? 'bg-blue-300 text-white cursor-not-allowed'
+                  : 'bg-blue-600 text-white hover:bg-blue-700'
+              }`}
+            >
+              {isScanning && sorsaScanActive ? t.scanning : (language === 'tr' ? 'Sorsa ile Tara' : 'Scan with Sorsa')}
+            </button>
             <button
               type="button"
               onClick={() => void handleScanNow()}
