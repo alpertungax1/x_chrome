@@ -304,6 +304,8 @@ function scrapeAndScrollInPage(): {
   expected: number | null;
   cellCount: number;
   metaSize: number;
+  // Tüm meta - DOM'da olmayan kullanıcıların sayılarını da güncellemek için
+  fullMeta: Record<string, { followersCount?: number; followingCount?: number }>;
 } {
   const skip = new Set([
     'home', 'explore', 'search', 'notifications', 'messages', 'settings', 'i',
@@ -464,6 +466,8 @@ function scrapeAndScrollInPage(): {
     expected: readExpected(),
     cellCount: cells.length,
     metaSize: Object.keys(meta).length,
+    // Tüm meta'yı SW'ye gönder: DOM'da görünmeyen eski kullanıcılar da güncellensin
+    fullMeta: meta as Record<string, { followersCount?: number; followingCount?: number }>,
   };
 }
 
@@ -666,6 +670,7 @@ async function runScanTick() {
       expected: number | null;
       cellCount: number;
       metaSize?: number;
+      fullMeta?: Record<string, { followersCount?: number; followingCount?: number }>;
     } | null = null;
 
     try {
@@ -726,6 +731,30 @@ async function runScanTick() {
     }
     for (const u of active.users.values()) {
       if (typeof u.followersCount === 'number') withCounts++;
+    }
+
+    // fullMeta: DOM'da artık görünmeyen ama daha önce toplanan kullanıcıların
+    // sayılarını da güncelle (sanal liste sorununun çözümü)
+    if (pageResult.fullMeta) {
+      for (const [id, m] of Object.entries(pageResult.fullMeta)) {
+        const existing = active.users.get(id);
+        if (!existing) continue;
+        let changed = false;
+        if (typeof m.followersCount === 'number' && typeof existing.followersCount !== 'number') {
+          existing.followersCount = m.followersCount;
+          changed = true;
+        }
+        if (typeof m.followingCount === 'number' && typeof existing.followingCount !== 'number') {
+          existing.followingCount = m.followingCount;
+          changed = true;
+        }
+        if (changed) active.users.set(id, existing);
+      }
+      // withCounts'u yeniden hesapla
+      withCounts = 0;
+      for (const u of active.users.values()) {
+        if (typeof u.followersCount === 'number') withCounts++;
+      }
     }
 
     if (pageResult.expected != null) active.expected = pageResult.expected;
