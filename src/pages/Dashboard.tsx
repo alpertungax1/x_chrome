@@ -5,10 +5,11 @@ import { UserTable } from '../components/UserTable';
 import { ApiKeyModal } from '../components/ApiKeyModal';
 import { XUser } from '../types/user';
 import { relationshipAnalyzer } from '../analysis/relationship-analyzer';
-import { Users, UserMinus, UserCheck, Activity, Square, Globe, Key } from 'lucide-react';
+import { Users, UserMinus, UserCheck, Activity, Square, Globe, Key, UserX } from 'lucide-react';
+import { UnfollowersView } from '../components/UnfollowersView';
 import { translations } from '../i18n';
 
-type ViewMode = 'dashboard' | 'followers' | 'following' | 'notFollowingMe' | 'mutuals';
+type ViewMode = 'dashboard' | 'followers' | 'following' | 'notFollowingMe' | 'mutuals' | 'unfollowers';
 
 class ScanAbortedError extends Error {
   constructor(message = 'Tarama kullanıcı tarafından durduruldu.') {
@@ -786,6 +787,10 @@ const Dashboard: React.FC = () => {
     if (currentView === 'mutuals') {
       return <UserTable key="mutuals" users={relationshipAnalyzer.findMutuals(users)} title={t.nav.mutuals} lang={language} {...tableProps} />;
     }
+
+    if (currentView === 'unfollowers') {
+      return <UnfollowersView lang={language} />;
+    }
   };
 
   const navItemClass = (viewName: ViewMode) => `flex items-center space-x-3 p-3 rounded-lg font-medium transition-colors cursor-pointer ${
@@ -830,6 +835,13 @@ const Dashboard: React.FC = () => {
           <div onClick={() => setCurrentView('mutuals')} className={navItemClass('mutuals')}>
             <UserCheck size={20} />
             <span>{t.nav.mutuals}</span>
+          </div>
+          <div onClick={() => setCurrentView('unfollowers')} className={navItemClass('unfollowers')}>
+            <UserX size={20} />
+            <span className="flex items-center gap-1.5">
+              {t.nav.unfollowers}
+              <span className="px-1.5 py-0.5 text-[10px] font-bold bg-blue-100 text-blue-700 rounded-md">NEW</span>
+            </span>
           </div>
         </nav>
 
@@ -902,30 +914,34 @@ const Dashboard: React.FC = () => {
                 {t.stop}
               </button>
             )}
-            <button
-              type="button"
-              onClick={() => void handleSorsaFullScan()}
-              disabled={isScanning || !!actionInProgress}
-              className={`px-5 py-2.5 rounded-lg font-medium transition-colors shadow-sm ${
-                isScanning || actionInProgress
-                  ? 'bg-blue-300 text-white cursor-not-allowed'
-                  : 'bg-blue-600 text-white hover:bg-blue-700'
-              }`}
-            >
-              {isScanning && sorsaScanActive ? t.scanning : (language === 'tr' ? 'Sorsa ile Tara' : 'Scan with Sorsa')}
-            </button>
-            <button
-              type="button"
-              onClick={() => void handleScanNow()}
-              disabled={isScanning || !!actionInProgress}
-              className={`px-5 py-2.5 rounded-lg font-medium transition-colors shadow-sm ${
-                isScanning || actionInProgress
-                  ? 'bg-gray-400 text-white cursor-not-allowed'
-                  : 'bg-gray-900 text-white hover:bg-gray-800'
-              }`}
-            >
-              {isScanning ? t.scanning : t.scanNow}
-            </button>
+            {currentView !== 'unfollowers' && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => void handleSorsaFullScan()}
+                  disabled={isScanning || !!actionInProgress}
+                  className={`px-5 py-2.5 rounded-lg font-medium transition-colors shadow-sm ${
+                    isScanning || actionInProgress
+                      ? 'bg-blue-300 text-white cursor-not-allowed'
+                      : 'bg-blue-600 text-white hover:bg-blue-700'
+                  }`}
+                >
+                  {isScanning && sorsaScanActive ? t.scanning : (language === 'tr' ? 'Sorsa ile Tara' : 'Scan with Sorsa')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleScanNow()}
+                  disabled={isScanning || !!actionInProgress}
+                  className={`px-5 py-2.5 rounded-lg font-medium transition-colors shadow-sm ${
+                    isScanning || actionInProgress
+                      ? 'bg-gray-400 text-white cursor-not-allowed'
+                      : 'bg-gray-900 text-white hover:bg-gray-800'
+                  }`}
+                >
+                  {isScanning ? t.scanning : t.scanNow}
+                </button>
+              </>
+            )}
           </div>
         </div>
 

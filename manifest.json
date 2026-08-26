@@ -23,6 +23,6 @@
       "run_at": "document_idle"
     }
   ],
-  "permissions": ["storage", "tabs", "windows", "scripting"],
+  "permissions": ["storage", "tabs", "windows", "scripting", "cookies"],
   "host_permissions": ["*://x.com/*", "*://*.x.com/*", "*://twitter.com/*", "*://*.twitter.com/*"]
 }

@@ -19,6 +19,21 @@ function initContentScript() {
   const scanner = new XScanner();
   const actionHandler = new XActionHandler();
 
+  // Bridge (MAIN world) mesajlarını yakala ve storage'a yaz
+  window.addEventListener('message', (event) => {
+    if (event.source !== window || !event.data) return;
+    if (event.data.source === 'xrm-bridge' && event.data.type === 'CREDENTIALS_CAPTURED') {
+      const creds = event.data.creds;
+      if (creds) {
+        chrome.storage.local.get('xrm_captured_creds').then((data) => {
+          const current = data.xrm_captured_creds || {};
+          const merged = { ...current, ...creds };
+          chrome.storage.local.set({ xrm_captured_creds: merged });
+        });
+      }
+    }
+  });
+
   /** Tarama popup'ında canlı progress HUD (dashboard donmuş olsa bile görünür). */
   function ensureScanOverlay(): HTMLElement {
     let el = document.getElementById('xrm-scan-overlay');
@@ -187,6 +202,13 @@ function initContentScript() {
     if (message.type === 'PING') {
       sendResponse({ ok: true, href: location.href });
       return false;
+    }
+
+    if ((message.type as string) === 'GET_CREDENTIALS') {
+      chrome.storage.local.get('xrm_captured_creds').then((data) => {
+        sendResponse(data.xrm_captured_creds || {});
+      });
+      return true;
     }
 
     if (message.type === 'GET_LOGGED_IN_USER') {
