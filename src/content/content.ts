@@ -1,5 +1,6 @@
 import { XScanner } from './scanner';
 import { XActionHandler } from './actions';
+import { xUnfollowersDirectScraper } from './unfollowers-core';
 import { logger } from '../utils/logger';
 import { AppMessage } from '../types/messages';
 import { isValidXUsername, usernameFromUrl } from '../utils/x-username';
@@ -208,6 +209,44 @@ function initContentScript() {
       chrome.storage.local.get('xrm_captured_creds').then((data) => {
         sendResponse(data.xrm_captured_creds || {});
       });
+      return true;
+    }
+
+    if ((message.type as string) === 'START_UNFOLLOWERS_SCAN') {
+      showScanOverlay('X Unfollowers taranıyor...');
+      xUnfollowersDirectScraper
+        .scan((status) => {
+          showScanOverlay(status);
+          safeSendMessage({ type: 'UNFOLLOWERS_PROGRESS' as any, payload: { status } });
+        })
+        .then((users) => {
+          hideScanOverlay();
+          sendResponse({ success: true, users });
+        })
+        .catch((err) => {
+          hideScanOverlay();
+          sendResponse({ success: false, error: err?.message || String(err) });
+        });
+      return true;
+    }
+
+    if ((message.type as string) === 'STOP_UNFOLLOWERS_SCAN') {
+      xUnfollowersDirectScraper.stop();
+      hideScanOverlay();
+      sendResponse({ ok: true });
+      return false;
+    }
+
+    if ((message.type as string) === 'UNFOLLOW_USER_DIRECT') {
+      const userId = (message.payload as { userId?: string })?.userId;
+      if (!userId) {
+        sendResponse({ success: false, error: 'User ID missing' });
+        return false;
+      }
+      xUnfollowersDirectScraper
+        .unfollowUser(userId)
+        .then(() => sendResponse({ success: true }))
+        .catch((err) => sendResponse({ success: false, error: err?.message || String(err) }));
       return true;
     }
 

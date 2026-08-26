@@ -595,87 +595,62 @@ export class UnfollowersService {
     onProgressCount: (count: number) => void,
     isAborted: () => boolean
   ): Promise<UnfollowerUser[]> {
-    onStatus('X oturumu ve çerezler kontrol ediliyor...');
-    await this.ensureCredentials(onStatus);
+    onStatus('X sekmesi ve oturumu kontrol ediliyor...');
+    const tabId = await this.ensureXSession(onStatus);
 
     if (isAborted()) return [];
 
-    let following: UnfollowerUser[] = [];
-    const queryIds = [...new Set([this.queryId, ...FALLBACK_QUERY_IDS].filter(Boolean))] as string[];
-    const features = this.features || FALLBACK_FEATURES;
-    let lastErr: any = null;
-
-    onStatus('Takip edilen hesaplar taranıyor...');
-    for (const qid of queryIds) {
-      try {
-        following = await this.fetchFollowingGraphQL(
-          qid,
-          features,
-          (count) => {
-            onProgressCount(count);
-            onStatus(`Takip listesi taranıyor... ${count} hesap`);
-          },
-          isAborted
-        );
-        this.queryId = qid;
-        lastErr = null;
-        break;
-      } catch (err: any) {
-        lastErr = err;
-        if (err.status && err.status !== 404 && err.status !== 400) throw err;
+    const progressListener = (msg: any) => {
+      if (msg?.type === 'UNFOLLOWERS_PROGRESS' && msg.payload?.status) {
+        onStatus(msg.payload.status);
       }
-    }
+    };
+    chrome.runtime.onMessage.addListener(progressListener);
 
-    if (!following.length && !isAborted()) {
-      try {
-        onStatus('REST API üzerinden takip edilenler taranıyor...');
-        following = await this.fetchFollowingRest(
-          (count) => {
-            onProgressCount(count);
-            onStatus(`Takip listesi taranıyor (REST)... ${count} hesap`);
-          },
-          isAborted
-        );
-      } catch (err: any) {
-        lastErr = err;
+    try {
+      onStatus('Takip listeniz taranıyor...');
+      const response: any = await new Promise((resolve, reject) => {
+        chrome.tabs.sendMessage(tabId, { type: 'START_UNFOLLOWERS_SCAN' }, (res) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+          } else {
+            resolve(res);
+          }
+        });
+      });
+
+      if (!response?.success) {
+        throw new Error(response?.error || 'Tarama başarısız oldu.');
       }
+
+      const users: UnfollowerUser[] = response.users || [];
+      const settings = await this.getSettings();
+      const whitelistSet = new Set(settings.whitelist);
+
+      return users.map((u) => ({
+        ...u,
+        isWhitelisted: whitelistSet.has(u.id),
+      }));
+    } finally {
+      chrome.runtime.onMessage.removeListener(progressListener);
     }
-
-    if (!following.length) {
-      throw new Error(
-        'Takip listeniz okunamadı: ' + (lastErr?.message || 'Lütfen x.com sekmesini açıp sayfayı biraz kaydırın.')
-      );
-    }
-
-    if (isAborted()) return [];
-
-    onStatus(`Geri takip durumu kontrol ediliyor... (${following.length} hesap)`);
-    await this.lookupFollowedBy(
-      following,
-      (done, total) => {
-        onStatus(`Geri takip kontrolü: ${done} / ${total}`);
-      },
-      isAborted
-    );
-
-    if (isAborted()) return [];
-
-    const settings = await this.getSettings();
-    const whitelistSet = new Set(settings.whitelist);
-
-    const nonFollowers = following.filter((u) => u.followedBy === false).map((u) => ({
-      ...u,
-      isWhitelisted: whitelistSet.has(u.id),
-    }));
-
-    return nonFollowers;
   }
 
   public async unfollowUser(user: { id: string; username: string }): Promise<boolean> {
-    await this.xApiRequest('/i/api/1.1/friendships/destroy.json', {
-      method: 'POST',
-      body: new URLSearchParams({ user_id: user.id }).toString(),
+    const tabId = await this.ensureXSession();
+    const response: any = await new Promise((resolve, reject) => {
+      chrome.tabs.sendMessage(tabId, { type: 'UNFOLLOW_USER_DIRECT', payload: { userId: user.id } }, (res) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+        } else {
+          resolve(res);
+        }
+      });
     });
+
+    if (!response?.success) {
+      throw new Error(response?.error || 'Takipten çıkarma başarısız oldu.');
+    }
     return true;
   }
 
