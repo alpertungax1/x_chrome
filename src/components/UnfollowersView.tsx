@@ -6,16 +6,19 @@ import {
   UserX,
   UserCheck,
   Star,
-  Users,
-  Shield,
   Clock,
   Shuffle,
-  AlertTriangle,
   ExternalLink,
   Check,
-  Trash2,
   Sliders,
   Sparkles,
+  ArrowUpDown,
+  Filter,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  RotateCcw,
 } from 'lucide-react';
 import { UnfollowerUser, UnfollowersSettings } from '../types/unfollowers';
 import { unfollowersService } from '../services/unfollowers-service';
@@ -28,11 +31,19 @@ interface UnfollowersViewProps {
 
 type TabFilter = 'all' | 'selected' | 'whitelisted';
 
+type SortOption =
+  | 'default'
+  | 'oldest'
+  | 'followers_desc'
+  | 'followers_asc'
+  | 'name_asc'
+  | 'name_desc';
+
 export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
   const t = translations[lang].unfollowers;
   const { applyUnfollow } = useAppStore();
 
-  // State'ler
+  // Ana Veri State'leri
   const [accounts, setAccounts] = useState<UnfollowerUser[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [whitelistIds, setWhitelistIds] = useState<Set<string>>(new Set());
@@ -44,7 +55,7 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
     dailyCount: 0,
   });
 
-  // İşlem state'leri
+  // İşlem State'leri
   const [isScanning, setIsScanning] = useState(false);
   const [isUnfollowing, setIsUnfollowing] = useState(false);
   const [statusText, setStatusText] = useState('');
@@ -52,15 +63,24 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
   const [progressPercent, setProgressPercent] = useState<number | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
 
-  // Arama & Filtreleme
+  // Arama, Sekme, Filtre & Sıralama
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState<TabFilter>('all');
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [sortOption, setSortOption] = useState<SortOption>('default');
+  const [minFollowers, setMinFollowers] = useState<number | ''>('');
+  const [maxFollowers, setMaxFollowers] = useState<number | ''>('');
+  const [activeQuickFilter, setActiveQuickFilter] = useState<string | null>(null);
 
-  // Abort refs
+  // Sayfalama (Pagination)
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(50); // 25, 50, 100, 250, 0 (Tümü)
+
+  // Abort Refs
   const scanAbortRef = useRef(false);
   const unfollowAbortRef = useRef(false);
   const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const listTopRef = useRef<HTMLDivElement | null>(null);
 
   // Ayarları ve önbellekteki veriyi yükle
   useEffect(() => {
@@ -69,7 +89,6 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
       setSettings(s);
       setWhitelistIds(new Set(s.whitelist));
 
-      // Önbellekteki son tarama sonucunu yükle
       try {
         const cached = await chrome.storage.local.get('xrm_cached_unfollowers');
         if (Array.isArray(cached.xrm_cached_unfollowers) && cached.xrm_cached_unfollowers.length > 0) {
@@ -90,6 +109,11 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
     };
   }, []);
 
+  // Filtreler veya arama değiştiğinde sayfayı 1'e sıfırla
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, activeTab, sortOption, minFollowers, maxFollowers, activeQuickFilter, pageSize]);
+
   // Ayar değişikliklerini kaydet
   const handleUpdateSettings = async (updates: Partial<UnfollowersSettings>) => {
     const updated = { ...settings, ...updates };
@@ -104,7 +128,6 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
       next.delete(userId);
     } else {
       next.add(userId);
-      // Whitelist'e eklenince seçimden çıkar
       setSelectedIds((prev) => {
         const p = new Set(prev);
         p.delete(userId);
@@ -113,7 +136,6 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
     }
     setWhitelistIds(next);
 
-    // Hesaplar listesinde de güncelle
     setAccounts((prev) =>
       prev.map((u) => (u.id === userId ? { ...u, isWhitelisted: next.has(userId) } : u))
     );
@@ -124,7 +146,7 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
 
   // Seçim toggle
   const toggleSelect = (userId: string) => {
-    if (whitelistIds.has(userId)) return; // Korumalı hesap seçilemez
+    if (whitelistIds.has(userId)) return;
     setSelectedIds((prev) => {
       const next = new Set(prev);
       if (next.has(userId)) next.delete(userId);
@@ -134,9 +156,18 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
   };
 
   // Toplu seçim fonksiyonları
-  const selectAll = () => {
-    const selectable = filteredAccounts.filter((u) => !whitelistIds.has(u.id));
+  const selectAllFiltered = () => {
+    const selectable = filteredAndSortedAccounts.filter((u) => !whitelistIds.has(u.id));
     setSelectedIds(new Set(selectable.map((u) => u.id)));
+  };
+
+  const selectCurrentPageOnly = () => {
+    const selectable = paginatedAccounts.filter((u) => !whitelistIds.has(u.id));
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      selectable.forEach((u) => next.add(u.id));
+      return next;
+    });
   };
 
   const selectNone = () => {
@@ -146,6 +177,28 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
   const selectNonWhitelisted = () => {
     const nonWl = accounts.filter((u) => !whitelistIds.has(u.id));
     setSelectedIds(new Set(nonWl.map((u) => u.id)));
+  };
+
+  // Hızlı takipçi filtreleri
+  const applyQuickFilter = (type: string, min: number | '', max: number | '') => {
+    if (activeQuickFilter === type) {
+      setActiveQuickFilter(null);
+      setMinFollowers('');
+      setMaxFollowers('');
+    } else {
+      setActiveQuickFilter(type);
+      setMinFollowers(min);
+      setMaxFollowers(max);
+    }
+  };
+
+  const clearAllFilters = () => {
+    setSearchQuery('');
+    setMinFollowers('');
+    setMaxFollowers('');
+    setActiveQuickFilter(null);
+    setSortOption('default');
+    setActiveTab('all');
   };
 
   // ═══════════════════════════════════════════════════════════
@@ -167,7 +220,7 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
           setStatusText(msg);
         },
         (_count) => {
-          // progress count update
+          // progress count
         },
         () => scanAbortRef.current
       );
@@ -214,7 +267,7 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
     );
 
     if (targets.length === 0) {
-      alert('Lütfen takipten çıkarmak için en az bir hesap seçin.');
+      alert(lang === 'tr' ? 'Lütfen takipten çıkarmak için en az bir hesap seçin.' : 'Please select at least one account to unfollow.');
       return;
     }
 
@@ -246,11 +299,9 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
           await unfollowersService.unfollowUser(user);
           done++;
 
-          // Günlük sayacı artır
           const newCount = await unfollowersService.incrementDailyCount();
           setSettings((prev) => ({ ...prev, dailyCount: newCount }));
 
-          // UI ve ana DB'den çıkar
           setSelectedIds((prev) => {
             const next = new Set(prev);
             next.delete(user.id);
@@ -263,7 +314,6 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
             return next;
           });
 
-          // Ana store ile senkronize et
           void applyUnfollow(user.username);
         } catch (err: any) {
           failed++;
@@ -273,7 +323,7 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
             setStatusText(t.rateLimitWarning);
             setStatusType('warn');
             await new Promise((r) => setTimeout(r, 60000));
-            i--; // Tekrar dene
+            i--;
             continue;
           }
 
@@ -282,7 +332,6 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
           await new Promise((r) => setTimeout(r, 1500));
         }
 
-        // Son hesap değilse ve iptal edilmediyse bekle (Jitter ile)
         if (i < targets.length - 1 && !unfollowAbortRef.current) {
           const delayMs = unfollowersService.calculateDelayMs(
             settings.delaySeconds,
@@ -357,15 +406,20 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
   };
 
   // ═══════════════════════════════════════════════════════════
-  // FİLTRELEME & HESAPLAMA
+  // FİLTRELEME & SIRALAMA & SAYFALAMA HESAPLAMALARI
   // ═══════════════════════════════════════════════════════════
-  const filteredAccounts = useMemo(() => {
-    return accounts.filter((u) => {
-      // Tab filtreleme
+  const filteredAndSortedAccounts = useMemo(() => {
+    // 1. Filtreleme
+    const filtered = accounts.filter((u) => {
+      // Sekme Filtresi
       if (activeTab === 'selected' && !selectedIds.has(u.id)) return false;
       if (activeTab === 'whitelisted' && !whitelistIds.has(u.id)) return false;
 
-      // Metin arama
+      // Min / Max Takipçi Filtresi
+      if (minFollowers !== '' && u.followers < minFollowers) return false;
+      if (maxFollowers !== '' && u.followers > maxFollowers) return false;
+
+      // Metin Arama
       if (!searchQuery.trim()) return true;
       const q = searchQuery.toLowerCase().trim();
       return (
@@ -374,13 +428,61 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
         u.id.includes(q)
       );
     });
-  }, [accounts, activeTab, selectedIds, whitelistIds, searchQuery]);
+
+    // 2. Sıralama
+    const sorted = [...filtered];
+    switch (sortOption) {
+      case 'oldest':
+        sorted.reverse();
+        break;
+      case 'followers_desc':
+        sorted.sort((a, b) => b.followers - a.followers);
+        break;
+      case 'followers_asc':
+        sorted.sort((a, b) => a.followers - b.followers);
+        break;
+      case 'name_asc':
+        sorted.sort((a, b) => a.name.localeCompare(b.name));
+        break;
+      case 'name_desc':
+        sorted.sort((a, b) => b.name.localeCompare(a.name));
+        break;
+      case 'default':
+      default:
+        break;
+    }
+
+    return sorted;
+  }, [accounts, activeTab, selectedIds, whitelistIds, minFollowers, maxFollowers, searchQuery, sortOption]);
+
+  // Sayfalama Dilimi
+  const totalFilteredCount = filteredAndSortedAccounts.length;
+  const effectivePageSize = pageSize === 0 ? totalFilteredCount || 1 : pageSize;
+  const totalPages = Math.max(1, Math.ceil(totalFilteredCount / effectivePageSize));
+  const validCurrentPage = Math.min(Math.max(1, currentPage), totalPages);
+
+  const paginatedAccounts = useMemo(() => {
+    if (pageSize === 0) return filteredAndSortedAccounts;
+    const start = (validCurrentPage - 1) * pageSize;
+    return filteredAndSortedAccounts.slice(start, start + pageSize);
+  }, [filteredAndSortedAccounts, validCurrentPage, pageSize]);
+
+  const fromIndex = totalFilteredCount === 0 ? 0 : (validCurrentPage - 1) * effectivePageSize + 1;
+  const toIndex = Math.min(validCurrentPage * effectivePageSize, totalFilteredCount);
 
   const selectedCount = selectedIds.size;
   const whitelistedCount = whitelistIds.size;
 
+  const handlePageChange = (newPage: number) => {
+    const clamped = Math.min(Math.max(1, newPage), totalPages);
+    setCurrentPage(clamped);
+    if (listTopRef.current) {
+      listTopRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  };
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" ref={listTopRef}>
       {/* ── Üst Başlık ve Tanıtım ── */}
       <div className="bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 text-white rounded-2xl p-6 shadow-md relative overflow-hidden">
         <div className="absolute right-0 top-0 translate-x-8 -translate-y-8 w-64 h-64 bg-blue-500/10 rounded-full blur-3xl pointer-events-none" />
@@ -547,8 +649,8 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
                 <button
                   type="button"
                   onClick={async () => {
-                    await chrome.tabs.create({ url: 'https://x.com/home' });
-                    setStatusText('x.com sekmesi açıldı. Giriş yaptıktan sonra tekrar "Taramayı Başlat" düğmesine basın.');
+                    await chrome.tabs.create({ url: 'https://x.com/following' });
+                    setStatusText('x.com /following sekmesi açıldı. Sayfayı biraz aşağı kaydırıp tekrar "Taramayı Başlat" düğmesine basın.');
                     setStatusType('info');
                   }}
                   className="px-3 py-1.5 text-xs font-semibold bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors shadow-xs flex items-center gap-1.5"
@@ -577,9 +679,10 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
         </div>
       )}
 
-      {/* ── Eylem ve Filtreleme Araç Çubuğu ── */}
-      <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm space-y-4">
-        <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3">
+      {/* ── Eylem, Arama, Sıralama ve Filtreleme Araç Çubuğu ── */}
+      <div className="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm space-y-4">
+        {/* Üst Satır: Arama, Sıralama ve Çıkarma Butonu */}
+        <div className="flex flex-col lg:flex-row justify-between items-stretch lg:items-center gap-3">
           {/* Arama Kutusu */}
           <div className="relative flex-1 max-w-md">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
@@ -588,8 +691,28 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
               placeholder={t.searchPlaceholder}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+              className="w-full pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
             />
+          </div>
+
+          {/* Sıralama Seçici */}
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-gray-500 flex items-center gap-1">
+              <ArrowUpDown size={14} className="text-gray-400" />
+              {t.sort.label}
+            </span>
+            <select
+              value={sortOption}
+              onChange={(e) => setSortOption(e.target.value as SortOption)}
+              className="px-3 py-2 text-xs font-semibold bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-xl text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 cursor-pointer"
+            >
+              <option value="default">{t.sort.default}</option>
+              <option value="oldest">{t.sort.oldest}</option>
+              <option value="followers_desc">{t.sort.followersDesc} (↓)</option>
+              <option value="followers_asc">{t.sort.followersAsc} (↑)</option>
+              <option value="name_asc">{t.sort.nameAsc}</option>
+              <option value="name_desc">{t.sort.nameDesc}</option>
+            </select>
           </div>
 
           {/* Çıkarma Butonları */}
@@ -597,7 +720,7 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
             {isUnfollowing ? (
               <button
                 onClick={handleStopUnfollow}
-                className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold rounded-lg shadow-sm transition-colors"
+                className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold rounded-xl shadow-sm transition-colors"
               >
                 <Square size={15} fill="currentColor" />
                 {t.stopButton}
@@ -606,7 +729,7 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
               <button
                 onClick={handleStartUnfollow}
                 disabled={selectedCount === 0 || isScanning}
-                className={`flex items-center gap-2 px-4 py-2 text-sm font-semibold rounded-lg shadow-sm transition-colors ${
+                className={`flex items-center gap-2 px-4 py-2 text-sm font-semibold rounded-xl shadow-sm transition-colors ${
                   selectedCount === 0 || isScanning
                     ? 'bg-gray-100 text-gray-400 cursor-not-allowed border border-gray-200'
                     : 'bg-red-600 hover:bg-red-700 text-white shadow-red-600/20'
@@ -619,13 +742,86 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
           </div>
         </div>
 
-        {/* Alt Seçim ve Filtreleme Butonları */}
-        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-gray-100 text-xs">
-          {/* Sekme Butonları */}
-          <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-lg">
+        {/* Orta Satır: Hızlı Takipçi Filtreleri ve Özel Min / Max Inputları */}
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-gray-100 text-xs">
+          {/* Hızlı Takipçi Butonları */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-gray-400 font-medium mr-1 flex items-center gap-1">
+              <Filter size={12} />
+              {t.filters.quickLabel}
+            </span>
+            {(
+              [
+                { label: '< 50', type: 'lt50', min: '' as const, max: 50 },
+                { label: '< 100', type: 'lt100', min: '' as const, max: 100 },
+                { label: '< 500', type: 'lt500', min: '' as const, max: 500 },
+                { label: '< 1.000', type: 'lt1k', min: '' as const, max: 1000 },
+                { label: '< 5.000', type: 'lt5k', min: '' as const, max: 5000 },
+                { label: '> 10.000', type: 'gt10k', min: 10000, max: '' as const },
+              ] as const
+            ).map((btn) => (
+              <button
+                key={btn.type}
+                type="button"
+                onClick={() => applyQuickFilter(btn.type, btn.min, btn.max)}
+                className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
+                  activeQuickFilter === btn.type
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200 hover:text-gray-900'
+                }`}
+              >
+                {btn.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Özel Min - Max Inputları */}
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min="0"
+              placeholder={t.filters.minFollowers}
+              value={minFollowers}
+              onChange={(e) => {
+                setActiveQuickFilter(null);
+                setMinFollowers(e.target.value === '' ? '' : parseInt(e.target.value, 10));
+              }}
+              className="w-24 px-2.5 py-1 text-xs border border-gray-200 rounded-lg focus:outline-none focus:border-blue-500"
+            />
+            <span className="text-gray-400">-</span>
+            <input
+              type="number"
+              min="0"
+              placeholder={t.filters.maxFollowers}
+              value={maxFollowers}
+              onChange={(e) => {
+                setActiveQuickFilter(null);
+                setMaxFollowers(e.target.value === '' ? '' : parseInt(e.target.value, 10));
+              }}
+              className="w-24 px-2.5 py-1 text-xs border border-gray-200 rounded-lg focus:outline-none focus:border-blue-500"
+            />
+
+            {(minFollowers !== '' || maxFollowers !== '' || searchQuery !== '' || activeQuickFilter !== null) && (
+              <button
+                type="button"
+                onClick={clearAllFilters}
+                className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors"
+                title={t.filters.clearFilter}
+              >
+                <RotateCcw size={12} />
+                {t.filters.clearFilter}
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Alt Satır: Sekmeler, Sayfa Başı Seçici ve Toplu Seçim İşlemleri */}
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-gray-100 text-xs">
+          {/* Sekme Butonları (Tümü / Seçilenler / Yıldızlılar) */}
+          <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-xl">
             <button
               onClick={() => setActiveTab('all')}
-              className={`px-3 py-1.5 rounded-md font-medium transition-colors ${
+              className={`px-3 py-1.5 rounded-lg font-medium transition-colors ${
                 activeTab === 'all'
                   ? 'bg-white text-gray-900 shadow-xs'
                   : 'text-gray-600 hover:text-gray-900'
@@ -635,7 +831,7 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
             </button>
             <button
               onClick={() => setActiveTab('selected')}
-              className={`px-3 py-1.5 rounded-md font-medium transition-colors ${
+              className={`px-3 py-1.5 rounded-lg font-medium transition-colors ${
                 activeTab === 'selected'
                   ? 'bg-white text-gray-900 shadow-xs'
                   : 'text-gray-600 hover:text-gray-900'
@@ -645,7 +841,7 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
             </button>
             <button
               onClick={() => setActiveTab('whitelisted')}
-              className={`px-3 py-1.5 rounded-md font-medium transition-colors ${
+              className={`px-3 py-1.5 rounded-lg font-medium transition-colors ${
                 activeTab === 'whitelisted'
                   ? 'bg-white text-gray-900 shadow-xs'
                   : 'text-gray-600 hover:text-gray-900'
@@ -655,23 +851,58 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
             </button>
           </div>
 
+          {/* Sayfa Başı Eleman Sayısı (Page Size) */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-gray-400 font-medium">{t.pagination.perPage}</span>
+            <div className="flex items-center gap-1 bg-gray-100 p-0.5 rounded-lg">
+              {[25, 50, 100, 250, 0].map((size) => (
+                <button
+                  key={size}
+                  type="button"
+                  onClick={() => setPageSize(size)}
+                  className={`px-2 py-1 rounded-md font-semibold text-[11px] transition-colors ${
+                    pageSize === size
+                      ? 'bg-white text-blue-700 shadow-xs'
+                      : 'text-gray-500 hover:text-gray-900'
+                  }`}
+                >
+                  {size === 0 ? t.pagination.all : size}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Hızlı Seçim Aksiyonları */}
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
-              onClick={selectAll}
-              className="px-2.5 py-1 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-md transition-colors"
+              type="button"
+              onClick={selectAllFiltered}
+              className="px-2.5 py-1 font-semibold text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors border border-blue-100"
+              title="Filtrelenmiş tüm sayfalardaki hesapları seç"
             >
-              {t.selectAll}
+              {t.selectAllFiltered(filteredAndSortedAccounts.filter((u) => !whitelistIds.has(u.id)).length)}
             </button>
+            {pageSize > 0 && totalPages > 1 && (
+              <button
+                type="button"
+                onClick={selectCurrentPageOnly}
+                className="px-2.5 py-1 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+                title="Sadece geçerli sayfadakileri seç"
+              >
+                {lang === 'tr' ? `Bu Sayfayı Seç (${paginatedAccounts.filter((u) => !whitelistIds.has(u.id)).length})` : `Select Page (${paginatedAccounts.filter((u) => !whitelistIds.has(u.id)).length})`}
+              </button>
+            )}
             <button
+              type="button"
               onClick={selectNonWhitelisted}
-              className="px-2.5 py-1 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-md transition-colors"
+              className="px-2.5 py-1 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
             >
               {t.selectNonWhitelisted}
             </button>
             <button
+              type="button"
               onClick={selectNone}
-              className="px-2.5 py-1 text-red-600 hover:text-red-700 hover:bg-red-50 rounded-md transition-colors"
+              className="px-2.5 py-1 text-red-600 hover:text-red-700 hover:bg-red-50 rounded-lg transition-colors"
             >
               {t.selectNone}
             </button>
@@ -680,8 +911,20 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
       </div>
 
       {/* ── Hesaplar Tablosu / Listesi ── */}
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-        {filteredAccounts.length === 0 ? (
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+        {/* Üst Bilgi Barı */}
+        <div className="px-5 py-3 bg-gray-50/70 border-b border-gray-100 flex items-center justify-between text-xs text-gray-500">
+          <div>
+            {t.pagination.pageInfo(fromIndex, toIndex, totalFilteredCount)}
+          </div>
+          {pageSize > 0 && totalPages > 1 && (
+            <div className="font-semibold text-gray-700">
+              {t.pagination.pageNumber(validCurrentPage, totalPages)}
+            </div>
+          )}
+        </div>
+
+        {paginatedAccounts.length === 0 ? (
           <div className="p-12 text-center text-gray-400">
             <UserCheck size={40} className="mx-auto mb-3 text-gray-300" />
             <p className="text-base font-semibold text-gray-600">
@@ -695,7 +938,7 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
           </div>
         ) : (
           <div className="divide-y divide-gray-100">
-            {filteredAccounts.map((user) => {
+            {paginatedAccounts.map((user) => {
               const isSelected = selectedIds.has(user.id);
               const isStarred = whitelistIds.has(user.id);
 
@@ -708,7 +951,6 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
                 >
                   {/* Sol: Checkbox + Yıldız + Avatar + Bilgiler */}
                   <div className="flex items-center gap-3.5 min-w-0">
-                    {/* Checkbox */}
                     <input
                       type="checkbox"
                       checked={isSelected}
@@ -719,8 +961,8 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
                       }`}
                     />
 
-                    {/* Yıldız (Koruma) Butonu */}
                     <button
+                      type="button"
                       onClick={() => toggleWhitelist(user.id)}
                       title={isStarred ? t.protectTooltipRemove : t.protectTooltipAdd}
                       className={`p-1 rounded-lg transition-colors ${
@@ -732,7 +974,6 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
                       <Star size={18} className={isStarred ? 'fill-amber-500' : ''} />
                     </button>
 
-                    {/* Avatar */}
                     <img
                       src={user.avatar || 'https://abs.twimg.com/sticky/default_profile_images/default_profile_normal.png'}
                       alt={user.name}
@@ -743,7 +984,6 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
                       }}
                     />
 
-                    {/* İsim ve @username */}
                     <div className="min-w-0">
                       <div className="flex items-center gap-1.5">
                         <span className="font-semibold text-sm text-gray-900 truncate">
@@ -788,6 +1028,7 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
                     </div>
 
                     <button
+                      type="button"
                       onClick={() => handleSingleUnfollow(user)}
                       disabled={isUnfollowing}
                       className="px-3 py-1.5 text-xs font-semibold text-gray-600 hover:text-red-600 hover:bg-red-50 border border-gray-200 hover:border-red-200 rounded-lg transition-colors"
@@ -798,6 +1039,102 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
                 </div>
               );
             })}
+          </div>
+        )}
+
+        {/* ── Alt Sayfalama (Pagination Bar) ── */}
+        {pageSize > 0 && totalPages > 1 && (
+          <div className="px-5 py-4 bg-gray-50/80 border-t border-gray-100 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+            <div className="text-gray-500">
+              {t.pagination.pageInfo(fromIndex, toIndex, totalFilteredCount)}
+            </div>
+
+            <div className="flex items-center gap-1">
+              {/* Başa Dön */}
+              <button
+                type="button"
+                onClick={() => handlePageChange(1)}
+                disabled={validCurrentPage === 1}
+                className="p-1.5 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed text-gray-600 transition-colors"
+                title={t.pagination.first}
+              >
+                <ChevronsLeft size={16} />
+              </button>
+
+              {/* Önceki */}
+              <button
+                type="button"
+                onClick={() => handlePageChange(validCurrentPage - 1)}
+                disabled={validCurrentPage === 1}
+                className="px-2.5 py-1.5 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed text-gray-600 font-medium transition-colors flex items-center gap-1"
+              >
+                <ChevronLeft size={14} />
+                <span>{t.pagination.prev}</span>
+              </button>
+
+              {/* Sayfa Numaraları */}
+              <div className="flex items-center gap-1 px-1">
+                {(() => {
+                  const pages: (number | string)[] = [];
+                  const maxButtons = 5;
+                  if (totalPages <= maxButtons + 2) {
+                    for (let i = 1; i <= totalPages; i++) pages.push(i);
+                  } else {
+                    pages.push(1);
+                    const left = Math.max(2, validCurrentPage - 1);
+                    const right = Math.min(totalPages - 1, validCurrentPage + 1);
+
+                    if (left > 2) pages.push('...');
+                    for (let i = left; i <= right; i++) pages.push(i);
+                    if (right < totalPages - 1) pages.push('...');
+                    pages.push(totalPages);
+                  }
+
+                  return pages.map((p, idx) =>
+                    typeof p === 'number' ? (
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() => handlePageChange(p)}
+                        className={`w-8 h-8 rounded-lg font-semibold transition-all ${
+                          validCurrentPage === p
+                            ? 'bg-blue-600 text-white shadow-xs'
+                            : 'border border-gray-200 bg-white text-gray-700 hover:bg-gray-50'
+                        }`}
+                      >
+                        {p}
+                      </button>
+                    ) : (
+                      <span key={idx} className="px-1 text-gray-400 font-bold">
+                        {p}
+                      </span>
+                    )
+                  );
+                })()}
+              </div>
+
+              {/* Sonraki */}
+              <button
+                type="button"
+                onClick={() => handlePageChange(validCurrentPage + 1)}
+                disabled={validCurrentPage === totalPages}
+                className="px-2.5 py-1.5 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed text-gray-600 font-medium transition-colors flex items-center gap-1"
+              >
+                <span>{t.pagination.next}</span>
+                <ChevronRight size={14} />
+              </button>
+
+              {/* Sona Git */}
+              <button
+                type="button"
+                onClick={() => handlePageChange(totalPages)}
+                disabled={validCurrentPage === totalPages}
+                className="p-1.5 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed text-gray-600 transition-colors"
+                title={t.pagination.last}
+              >
+                <ChevronsRight size={16} />
+              </button>
+            </div>
           </div>
         )}
       </div>
