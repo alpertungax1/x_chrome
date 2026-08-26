@@ -33,6 +33,7 @@ const FALLBACK_QUERY_IDS = [
   'zx6e-TLzRkeDO_a7p4b3JQ',
   'g5P4cbXR4ta4oCeE7y2vLQ',
   't-BPmIS0UWDrFdYrOxEOdQ',
+  '4vh57z89_R779N4-8k-b4g',
 ];
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -94,83 +95,255 @@ export class UnfollowersService {
     return newCount;
   }
 
+  private waitForTabLoaded(tabId: number, timeoutMs = 15000): Promise<void> {
+    return new Promise((resolve) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          chrome.tabs.onUpdated.removeListener(listener);
+          resolve();
+        }
+      }, timeoutMs);
+
+      const listener = (id: number, info: chrome.tabs.TabChangeInfo) => {
+        if (id === tabId && info.status === 'complete') {
+          if (!settled) {
+            settled = true;
+            clearTimeout(timer);
+            chrome.tabs.onUpdated.removeListener(listener);
+            resolve();
+          }
+        }
+      };
+      chrome.tabs.onUpdated.addListener(listener);
+    });
+  }
+
   /**
-   * Çerezleri veya yakalanmış token'ları tespit et
+   * X sekmesinden doğrudan çerezleri ve kullanıcı kimliğini oku
    */
-  public async ensureCredentials(): Promise<{ csrf: string; userId: string; bearer: string }> {
-    // 1. Storage'dan daha önce network-hook tarafından yakalanan kimlikleri kontrol et
-    const stored = await chrome.storage.local.get('xrm_captured_creds');
-    if (stored.xrm_captured_creds) {
-      const c = stored.xrm_captured_creds;
-      if (c.bearer) this.bearer = c.bearer;
-      if (c.queryId) this.queryId = c.queryId;
-      if (c.features) this.features = c.features;
-      if (c.fieldToggles) this.fieldToggles = c.fieldToggles;
-      if (c.userId) this.userId = c.userId;
-      if (c.csrf) this.csrfToken = c.csrf;
+  public async readCredsFromTab(tabId: number): Promise<{ csrf: string | null; userId: string | null }> {
+    try {
+      const [result] = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => {
+          const getCookie = (name: string) => {
+            const m = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+            return m ? decodeURIComponent(m[1]) : null;
+          };
+          const ct0 = getCookie('ct0');
+          const twid = getCookie('twid') || '';
+          const m = twid.match(/(\d{5,})/);
+          return {
+            csrf: ct0,
+            userId: m ? m[1] : null,
+          };
+        },
+      });
+      if (result?.result) {
+        if (result.result.csrf) this.csrfToken = result.result.csrf;
+        if (result.result.userId) this.userId = result.result.userId;
+        return result.result;
+      }
+    } catch (e) {
+      console.warn('readCredsFromTab error:', e);
+    }
+    return { csrf: this.csrfToken, userId: this.userId };
+  }
+
+  /**
+   * Açık bir X sekmesi bul veya gerekirse sekme açarak oturumu hazırla
+   */
+  public async ensureXSession(onStatus?: (msg: string) => void): Promise<number> {
+    onStatus?.('X sekmesi aranıyor...');
+    const tabs = await chrome.tabs.query({ url: ['*://x.com/*', '*://twitter.com/*'] });
+    let targetTabId: number | null = null;
+
+    if (tabs.length > 0 && tabs[0].id) {
+      targetTabId = tabs[0].id;
+    } else {
+      onStatus?.('X sekmesi açılıyor...');
+      const newTab = await chrome.tabs.create({
+        url: 'https://x.com/home',
+        active: false,
+      });
+      if (!newTab.id) throw new Error('X sekmesi açılamadı.');
+      targetTabId = newTab.id;
+      await this.waitForTabLoaded(targetTabId);
+      await sleep(2000);
     }
 
-    // 2. chrome.cookies API ile x.com çerezlerini oku
-    if (chrome.cookies) {
+    // Sekmeden çerezleri oku
+    onStatus?.('X oturumu doğrulanıyor...');
+    const creds = await this.readCredsFromTab(targetTabId);
+
+    // Eğer cookies API ile de okunabiliyorsa dene
+    if (!creds.csrf && chrome.cookies) {
       try {
-        const ct0Cookie = await chrome.cookies.get({ url: 'https://x.com', name: 'ct0' }) ||
-                           await chrome.cookies.get({ url: 'https://twitter.com', name: 'ct0' });
-        if (ct0Cookie?.value) {
-          this.csrfToken = ct0Cookie.value;
+        const allCt0 = await chrome.cookies.getAll({ name: 'ct0' });
+        const targetCt0 = allCt0.find((c) => c.domain.includes('x.com') || c.domain.includes('twitter.com')) || allCt0[0];
+        if (targetCt0?.value) {
+          this.csrfToken = targetCt0.value;
         }
 
-        const twidCookie = await chrome.cookies.get({ url: 'https://x.com', name: 'twid' }) ||
-                            await chrome.cookies.get({ url: 'https://twitter.com', name: 'twid' });
-        if (twidCookie?.value) {
-          const m = decodeURIComponent(twidCookie.value).match(/(\d{5,})/);
+        const allTwid = await chrome.cookies.getAll({ name: 'twid' });
+        const targetTwid = allTwid.find((c) => c.domain.includes('x.com') || c.domain.includes('twitter.com')) || allTwid[0];
+        if (targetTwid?.value) {
+          const m = decodeURIComponent(targetTwid.value).match(/(\d{5,})/);
           if (m) this.userId = m[1];
         }
       } catch (e) {
-        console.warn('chrome.cookies get error:', e);
+        console.warn('chrome.cookies getAll error:', e);
       }
     }
 
-    // 3. Hala yoksa açık x.com sekmesine sor
-    if (!this.csrfToken || !this.userId) {
-      await this.requestCredentialsFromXTab();
+    if (!this.csrfToken) {
+      // Sekmeyi öne alıp kullanıcıdan giriş yapmasını iste
+      try {
+        await chrome.tabs.update(targetTabId, { active: true });
+      } catch (_) {}
+      throw new Error('X oturumu bulunamadı. Lütfen x.com sekmesini açıp giriş yapın.');
     }
 
-    if (!this.csrfToken) {
-      throw new Error('X oturumu bulunamadı. Lütfen x.com sekmesinde giriş yapın.');
+    return targetTabId;
+  }
+
+  /**
+   * Çerezleri ve kimlikleri tespit et
+   */
+  public async ensureCredentials(onStatus?: (msg: string) => void): Promise<{ csrf: string; userId: string; bearer: string }> {
+    // 1. Storage'dan yakalanan kimlikleri kontrol et
+    try {
+      const stored = await chrome.storage.local.get('xrm_captured_creds');
+      if (stored.xrm_captured_creds) {
+        const c = stored.xrm_captured_creds;
+        if (c.bearer) this.bearer = c.bearer;
+        if (c.queryId) this.queryId = c.queryId;
+        if (c.features) this.features = c.features;
+        if (c.fieldToggles) this.fieldToggles = c.fieldToggles;
+        if (c.userId) this.userId = c.userId;
+        if (c.csrf) this.csrfToken = c.csrf;
+      }
+    } catch {
+      // ignore
+    }
+
+    // 2. chrome.cookies API ile tara
+    if (chrome.cookies) {
+      try {
+        const allCt0 = await chrome.cookies.getAll({ name: 'ct0' });
+        const targetCt0 = allCt0.find((c) => c.domain.includes('x.com') || c.domain.includes('twitter.com')) || allCt0[0];
+        if (targetCt0?.value) {
+          this.csrfToken = targetCt0.value;
+        }
+
+        const allTwid = await chrome.cookies.getAll({ name: 'twid' });
+        const targetTwid = allTwid.find((c) => c.domain.includes('x.com') || c.domain.includes('twitter.com')) || allTwid[0];
+        if (targetTwid?.value) {
+          const m = decodeURIComponent(targetTwid.value).match(/(\d{5,})/);
+          if (m) this.userId = m[1];
+        }
+      } catch (e) {
+        console.warn('chrome.cookies scan error:', e);
+      }
+    }
+
+    // 3. Hala eksikse X sekmesini sağla ve oradan oku
+    if (!this.csrfToken || !this.userId) {
+      await this.ensureXSession(onStatus);
     }
 
     return {
-      csrf: this.csrfToken,
+      csrf: this.csrfToken || '',
       userId: this.userId || '',
       bearer: this.bearer || FALLBACK_BEARER,
     };
   }
 
-  private async requestCredentialsFromXTab(): Promise<void> {
-    try {
-      const tabs = await chrome.tabs.query({ url: ['*://x.com/*', '*://twitter.com/*'] });
-      if (tabs.length > 0 && tabs[0].id) {
-        const res = await chrome.tabs.sendMessage(tabs[0].id, { type: 'GET_CREDENTIALS' }).catch(() => null);
-        if (res) {
-          if (res.csrf) this.csrfToken = res.csrf;
-          if (res.userId) this.userId = res.userId;
-          if (res.bearer) this.bearer = res.bearer;
-          if (res.queryId) this.queryId = res.queryId;
-          if (res.features) this.features = res.features;
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }
-
   /**
-   * X API isteği yap (X oturum çerezleri ile)
+   * X API isteğini X sekmesi bağlamında güvenle çalıştır
    */
-  public async xApiRequest(path: string, options: { method?: string; body?: any; headers?: Record<string, string>; _retry?: number } = {}): Promise<any> {
+  public async xApiRequest(
+    path: string,
+    options: { method?: string; body?: any; headers?: Record<string, string>; _retry?: number } = {}
+  ): Promise<any> {
     const creds = await this.ensureCredentials();
     const retry = options._retry || 0;
 
+    // Yöntem A: X Sekmesi üzerinde fetch (Garantili Oturum)
+    try {
+      const tabId = await this.ensureXSession();
+      if (tabId) {
+        const [execResult] = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: async (apiPath: string, method: string, bearerAuth: string, csrf: string, bodyData?: string) => {
+            const reqHeaders: Record<string, string> = {
+              authorization: bearerAuth,
+              'x-csrf-token': csrf,
+              'x-twitter-auth-type': 'OAuth2Session',
+              'x-twitter-active-user': 'yes',
+              'x-twitter-client-language': 'tr',
+              accept: '*/*',
+            };
+            if (bodyData) {
+              reqHeaders['content-type'] = 'application/x-www-form-urlencoded';
+            }
+
+            const origin = location.hostname.includes('twitter.com') ? 'https://twitter.com' : 'https://x.com';
+            const response = await fetch(origin + apiPath, {
+              method: method || 'GET',
+              headers: reqHeaders,
+              body: bodyData || undefined,
+              credentials: 'include',
+            });
+
+            const status = response.status;
+            const text = await response.text();
+            let json = null;
+            try {
+              json = text ? JSON.parse(text) : null;
+            } catch (_) {}
+
+            return {
+              ok: response.ok,
+              status,
+              json,
+              error: !response.ok ? (json?.errors?.[0]?.message || json?.error || `HTTP ${status}`) : null,
+            };
+          },
+          args: [
+            path,
+            options.method || 'GET',
+            creds.bearer,
+            creds.csrf,
+            options.body || undefined,
+          ],
+        });
+
+        if (execResult?.result) {
+          const res = execResult.result;
+          if (res.status === 429 && retry < 4) {
+            console.warn('X Rate limit (429) hit. Waiting 45s...');
+            await sleep(45000);
+            return this.xApiRequest(path, { ...options, _retry: retry + 1 });
+          }
+
+          if (!res.ok) {
+            const err: any = new Error(res.error || `X API Hatası (${res.status})`);
+            err.status = res.status;
+            err.body = res.json;
+            throw err;
+          }
+
+          return res.json;
+        }
+      }
+    } catch (tabErr: any) {
+      console.warn('Tab execution error:', tabErr);
+    }
+
+    // Yöntem B: Extension fetch fallback
     const headers: Record<string, string> = {
       authorization: creds.bearer,
       'x-csrf-token': creds.csrf,
@@ -204,7 +377,7 @@ export class UnfollowersService {
     try {
       json = text ? JSON.parse(text) : null;
     } catch {
-      // json parse failed
+      // ignore
     }
 
     if (!res.ok) {
@@ -218,9 +391,6 @@ export class UnfollowersService {
     return json;
   }
 
-  /**
-   * GraphQL veya REST yanıtından UnfollowerUser nesnesini çıkar
-   */
   private extractUser(raw: any): UnfollowerUser | null {
     if (!raw || typeof raw !== 'object') return null;
     const node = raw.result && raw.result.legacy ? raw.result : raw;
@@ -274,9 +444,6 @@ export class UnfollowersService {
     return { users, cursor };
   }
 
-  /**
-   * GraphQL üzerinden Following listesini sayfalar halinde çek
-   */
   public async fetchFollowingGraphQL(
     queryId: string,
     features: string,
@@ -324,15 +491,12 @@ export class UnfollowersService {
       if (!parsed.cursor || parsed.users.length === 0) break;
       cursor = parsed.cursor;
       await sleep(700 + Math.floor(Math.random() * 500));
-      if (pages > 250) break; // Güvenlik sınırı (25.000 hesap)
+      if (pages > 250) break;
     }
 
     return all;
   }
 
-  /**
-   * REST API Fallback ile Following listesini çek
-   */
   public async fetchFollowingRest(
     onProgress?: (count: number) => void,
     isAborted?: () => boolean
@@ -374,9 +538,6 @@ export class UnfollowersService {
     return all;
   }
 
-  /**
-   * 100'erli paketlerle kullanıcının seni geri takip edip etmediğini kontrol et
-   */
   public async lookupFollowedBy(
     accounts: UnfollowerUser[],
     onProgress?: (completed: number, total: number) => void,
@@ -409,16 +570,13 @@ export class UnfollowersService {
     }
   }
 
-  /**
-   * Ana Tarama Fonksiyonu: Seni geri takip etmeyenleri bulur ve döner
-   */
   public async scanUnfollowers(
     onStatus: (status: string) => void,
     onProgressCount: (count: number) => void,
     isAborted: () => boolean
   ): Promise<UnfollowerUser[]> {
-    onStatus('Oturum bilgileri doğrulanıyor...');
-    await this.ensureCredentials();
+    onStatus('X oturumu ve çerezler kontrol ediliyor...');
+    await this.ensureCredentials(onStatus);
 
     if (isAborted()) return [];
 
@@ -482,7 +640,6 @@ export class UnfollowersService {
 
     if (isAborted()) return [];
 
-    // Seni takip ETMEYENLERİ filtrele (followedBy === false)
     const settings = await this.getSettings();
     const whitelistSet = new Set(settings.whitelist);
 
@@ -494,9 +651,6 @@ export class UnfollowersService {
     return nonFollowers;
   }
 
-  /**
-   * Doğrudan X API üzerinden bir hesabı takipten çıkar
-   */
   public async unfollowUser(user: { id: string; username: string }): Promise<boolean> {
     await this.xApiRequest('/i/api/1.1/friendships/destroy.json', {
       method: 'POST',
@@ -505,13 +659,10 @@ export class UnfollowersService {
     return true;
   }
 
-  /**
-   * Gecikme süresi (Jitter opsiyonu ile) hesapla
-   */
   public calculateDelayMs(delaySeconds: number, jitter: boolean): number {
     const base = Math.max(5, delaySeconds) * 1000;
     if (!jitter) return base;
-    return Math.round(base * (0.8 + Math.random() * 0.4)); // ±%20 sapma
+    return Math.round(base * (0.8 + Math.random() * 0.4));
   }
 }
 

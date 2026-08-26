@@ -526,21 +526,44 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
               : 'bg-blue-50 border-blue-200 text-blue-800'
           }`}
         >
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
             <div className="flex items-center gap-2 text-sm font-medium">
               <span
-                className={`w-2.5 h-2.5 rounded-full ${
-                  isScanning || isUnfollowing ? 'animate-ping bg-blue-600' : 'bg-gray-400'
+                className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${
+                  isScanning || isUnfollowing
+                    ? 'animate-ping bg-blue-600'
+                    : statusType === 'err'
+                    ? 'bg-red-600'
+                    : statusType === 'ok'
+                    ? 'bg-emerald-600'
+                    : 'bg-gray-400'
                 }`}
               />
               <span>{statusText}</span>
             </div>
 
-            {countdown !== null && (
-              <span className="text-xs font-bold px-2.5 py-1 bg-blue-600 text-white rounded-full animate-pulse">
-                {t.nextAccountIn(countdown)}
-              </span>
-            )}
+            <div className="flex items-center gap-2">
+              {statusType === 'err' && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await chrome.tabs.create({ url: 'https://x.com/home' });
+                    setStatusText('x.com sekmesi açıldı. Giriş yaptıktan sonra tekrar "Taramayı Başlat" düğmesine basın.');
+                    setStatusType('info');
+                  }}
+                  className="px-3 py-1.5 text-xs font-semibold bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors shadow-xs flex items-center gap-1.5"
+                >
+                  <ExternalLink size={13} />
+                  {lang === 'tr' ? 'x.com Sekmesini Aç' : 'Open x.com Tab'}
+                </button>
+              )}
+
+              {countdown !== null && (
+                <span className="text-xs font-bold px-2.5 py-1 bg-blue-600 text-white rounded-full animate-pulse">
+                  {t.nextAccountIn(countdown)}
+                </span>
+              )}
+            </div>
           </div>
 
           {progressPercent !== null && (
