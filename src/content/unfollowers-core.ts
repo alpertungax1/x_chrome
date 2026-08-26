@@ -39,8 +39,9 @@ const FALLBACK_QUERY_IDS = [
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function getCookie(name: string): string | null {
-  const m = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
-  return m ? decodeURIComponent(m[1]) : null;
+  const m = document.cookie.match(new RegExp('(?:^|;\\s*)' + name + '=([^;]*)'));
+  if (!m) return null;
+  return decodeURIComponent(m[1]).replace(/^"+|"+$/g, '').trim();
 }
 
 function selfUserId(): string | null {
@@ -62,7 +63,9 @@ export class XUnfollowersDirectScraper {
 
   private async xRequest(path: string, options: { method?: string; body?: any; headers?: Record<string, string>; _retry?: number } = {}): Promise<any> {
     const csrf = getCookie('ct0');
-    if (!csrf) throw new Error('X oturumu bulunamadı. Lütfen x.com sekmesinde giriş yapın.');
+    if (!csrf) {
+      throw new Error('X oturumu bulunamadı. Lütfen açık olan x.com sekmesinde hesabınıza giriş yapın.');
+    }
     const retry = options._retry || 0;
 
     const headers: Record<string, string> = {
@@ -101,7 +104,11 @@ export class XUnfollowersDirectScraper {
     }
 
     if (!res.ok) {
+      // CSRF uyuşmazlığı varsa kullanıcıya Following sayfasını açması tavsiye edilir
       const msg = json?.errors?.[0]?.message || json?.error || `X API Hatası (${res.status})`;
+      if (res.status === 403 && msg.includes('csrf')) {
+        throw new Error('X CSRF Güvenlik Hatası: Lütfen açık olan x.com sekmesinde F5 ile sayfayı yenileyip taramayı tekrar başlatın.');
+      }
       const err: any = new Error(msg);
       err.status = res.status;
       err.body = json;
@@ -305,7 +312,7 @@ export class XUnfollowersDirectScraper {
 
     if (!following.length) {
       throw new Error(
-        'Takip listeniz okunamadı: ' + (lastErr?.message || 'Lütfen x.com sekmesinde /following sayfasını açıp biraz aşağı kaydırın.')
+        'Takip listeniz okunamadı: ' + (lastErr?.message || 'Lütfen açık olan x.com sekmesini yenileyip tekrar deneyin.')
       );
     }
 
