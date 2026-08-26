@@ -277,10 +277,25 @@ export class UnfollowersService {
       if (tabId) {
         const [execResult] = await chrome.scripting.executeScript({
           target: { tabId },
-          func: async (apiPath: string, method: string, bearerAuth: string, csrf: string, bodyData?: string) => {
+          func: async (apiPath: string, method: string, bearerAuth: string, fallbackCsrf: string, bodyData?: string) => {
+            const getCookie = (name: string): string | null => {
+              const m = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+              return m ? decodeURIComponent(m[1]) : null;
+            };
+
+            // Canlı sekmedeki ct0 çerezini al - bu sayede header ve cookie %100 eşleşir
+            const liveCsrf = getCookie('ct0') || fallbackCsrf;
+            if (!liveCsrf) {
+              return {
+                ok: false,
+                status: 401,
+                error: 'X oturumu bulunamadı. Lütfen x.com sekmesinde giriş yapın.',
+              };
+            }
+
             const reqHeaders: Record<string, string> = {
               authorization: bearerAuth,
-              'x-csrf-token': csrf,
+              'x-csrf-token': liveCsrf,
               'x-twitter-auth-type': 'OAuth2Session',
               'x-twitter-active-user': 'yes',
               'x-twitter-client-language': 'tr',
@@ -290,7 +305,7 @@ export class UnfollowersService {
               reqHeaders['content-type'] = 'application/x-www-form-urlencoded';
             }
 
-            const origin = location.hostname.includes('twitter.com') ? 'https://twitter.com' : 'https://x.com';
+            const origin = location.origin || (location.hostname.includes('twitter.com') ? 'https://twitter.com' : 'https://x.com');
             const response = await fetch(origin + apiPath, {
               method: method || 'GET',
               headers: reqHeaders,
@@ -451,7 +466,12 @@ export class UnfollowersService {
     isAborted?: () => boolean
   ): Promise<UnfollowerUser[]> {
     const creds = await this.ensureCredentials();
-    const uid = creds.userId;
+    let uid = creds.userId;
+    if (!uid) {
+      const tabId = await this.ensureXSession();
+      const live = await this.readCredsFromTab(tabId);
+      uid = live.userId || '';
+    }
     if (!uid) throw new Error('Kullanıcı kimliği (User ID) okunamadı. Lütfen x.com’a giriş yapın.');
 
     const all: UnfollowerUser[] = [];
