@@ -1,8 +1,28 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { XUser } from '../types/user';
-import { UserMinus, UserPlus, CheckSquare, Square, MinusSquare, Search, Loader2, ChevronLeft, ChevronRight, AlertTriangle, Key } from 'lucide-react';
+import {
+  UserMinus,
+  UserPlus,
+  CheckSquare,
+  Square,
+  MinusSquare,
+  Search,
+  Loader2,
+  ChevronLeft,
+  ChevronRight,
+  AlertTriangle,
+  Key,
+  Shield,
+  Sliders,
+  Clock,
+  Coffee,
+  Shuffle,
+  StopCircle,
+} from 'lucide-react';
 import { translations, Language } from '../i18n';
 import { useAppStore } from '../store/app-store';
+import { unfollowersService } from '../services/unfollowers-service';
+import { UnfollowersSettings, SafetyPreset } from '../types/unfollowers';
 
 const PAGE_SIZE = 50;
 
@@ -26,55 +46,128 @@ function formatCount(n: number | undefined): string {
   return String(n);
 }
 
-export const UserTable: React.FC<UserTableProps> = ({ 
-  users, 
-  title, 
+export const UserTable: React.FC<UserTableProps> = ({
+  users,
+  title,
   lang = 'tr',
-  onUnfollow, 
+  onUnfollow,
   onFollow,
-  onBulkUnfollow,
   onBulkFollow,
   actionInProgress,
-  bulkProgress
 }) => {
   const t = translations[lang].table;
+  const ut = translations[lang].unfollowers;
+  const { updateUsersBatch, applyUnfollow } = useAppStore();
+
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
-  /** Max takipçi: bu sayıdan AZ olanlar (ör. 500 → 0–499) */
   const [maxFollowersInput, setMaxFollowersInput] = useState('');
   const [minFollowersInput, setMinFollowersInput] = useState('');
   const [hideUnknownCounts, setHideUnknownCounts] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const { updateUsersBatch } = useAppStore();
 
+  // Anti-Ban & Güvenlik Ayarları State'i
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [settings, setSettings] = useState<UnfollowersSettings>({
+    delaySeconds: 30,
+    minDelaySeconds: 20,
+    maxDelaySeconds: 45,
+    jitter: true,
+    safetyPreset: 'safe',
+    enableBatchCooldown: true,
+    batchSize: 15,
+    cooldownSeconds: 180,
+    dailyLimit: 150,
+    whitelist: [],
+    dailyDate: '',
+    dailyCount: 0,
+  });
+
+  // Toplu İşlem & Anti-Ban State'leri
+  const [isBulkRunning, setIsBulkRunning] = useState(false);
+  const [isResting, setIsResting] = useState(false);
+  const [bulkStatusText, setBulkStatusText] = useState('');
+  const [bulkCountdown, setBulkCountdown] = useState<number | null>(null);
+  const [bulkProgressState, setBulkProgressState] = useState<{ current: number; total: number } | null>(null);
+  const bulkAbortRef = useRef(false);
+
+  // Sorsa API State'leri
   const [sorsaLoading, setSorsaLoading] = useState(false);
   const [sorsaProgress, setSorsaProgress] = useState<{ fetched: number; total: number } | null>(null);
   const [sorsaError, setSorsaError] = useState('');
 
+  // Ayarları yükle
+  useEffect(() => {
+    void (async () => {
+      const s = await unfollowersService.getSettings();
+      setSettings(s);
+    })();
+  }, []);
+
+  const handleUpdateSettings = async (updates: Partial<UnfollowersSettings>) => {
+    const updated = { ...settings, ...updates };
+    setSettings(updated);
+    await unfollowersService.saveSettings(updates);
+  };
+
+  const applySafetyPreset = async (preset: SafetyPreset) => {
+    let updates: Partial<UnfollowersSettings> = { safetyPreset: preset };
+    if (preset === 'safe') {
+      updates = {
+        ...updates,
+        minDelaySeconds: 25,
+        maxDelaySeconds: 50,
+        jitter: true,
+        enableBatchCooldown: true,
+        batchSize: 15,
+        cooldownSeconds: 180,
+      };
+    } else if (preset === 'balanced') {
+      updates = {
+        ...updates,
+        minDelaySeconds: 15,
+        maxDelaySeconds: 30,
+        jitter: true,
+        enableBatchCooldown: true,
+        batchSize: 20,
+        cooldownSeconds: 120,
+      };
+    } else if (preset === 'fast') {
+      updates = {
+        ...updates,
+        minDelaySeconds: 8,
+        maxDelaySeconds: 15,
+        jitter: true,
+        enableBatchCooldown: false,
+      };
+    }
+    await handleUpdateSettings(updates);
+  };
+
   const handleFetchWithSorsa = async () => {
     const sorsaApiKey = localStorage.getItem('sorsaApiKey');
-    if (!sorsaApiKey) return; // Modal sayesinde normalde bura hep doludur
-    
-    const unknownUsers = users.filter(u => typeof u.followersCount !== 'number');
+    if (!sorsaApiKey) return;
+
+    const unknownUsers = users.filter((u) => typeof u.followersCount !== 'number');
     if (unknownUsers.length === 0) return;
-    
-    const usernames = unknownUsers.map(u => u.username);
+
+    const usernames = unknownUsers.map((u) => u.username);
     setSorsaLoading(true);
     setSorsaError('');
     setSorsaProgress({ fetched: 0, total: usernames.length });
-    
+
     try {
       const { fetchFollowerCounts } = await import('../utils/sorsa');
       const result = await fetchFollowerCounts(usernames, sorsaApiKey, (fetched, total) => {
         setSorsaProgress({ fetched, total });
       });
-      
+
       if (result.updates.length > 0) {
         await updateUsersBatch(result.updates);
       }
-      
+
       if (!result.success) {
         setSorsaError(result.error || 'API Error');
       }
@@ -86,26 +179,22 @@ export const UserTable: React.FC<UserTableProps> = ({
     }
   };
 
-  // Debounced arama (300ms)
+  // Debounced arama
   const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
     setSearchQuery(value);
-    
+
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
       setDebouncedQuery(value);
-      setCurrentPage(1); // Aramada sayfa 1'e dön
+      setCurrentPage(1);
     }, 300);
   }, []);
 
-  // Kullanıcı listesi değişince seçimleri temizle.
-  // users referansı yerine ID join'i kullanıyoruz: parent render'ı
-  // yeni array referansı üretse bile gereksiz reset olmaz.
   const usersKey = users.map((u) => u.id).join(',');
   useEffect(() => {
     setSelectedIds(new Set());
     setCurrentPage(1);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [usersKey]);
 
   const maxFollowers = useMemo(() => {
@@ -130,11 +219,11 @@ export const UserTable: React.FC<UserTableProps> = ({
     return { known, total: users.length };
   }, [users]);
 
-  // Count filtresi aktif mi?
   const hasCountFilter = maxFollowers != null || minFollowers != null;
-  // Count filtresi aktifken kaç kullanıcının sayısı bilinmiyor?
-  const unknownCountInFilter = hasCountFilter ? users.filter(u => typeof u.followersCount !== 'number').length : 0;
-  // Filtrelenmiş kullanıcılar
+  const unknownCountInFilter = hasCountFilter
+    ? users.filter((u) => typeof u.followersCount !== 'number').length
+    : 0;
+
   const filteredUsers = useMemo(() => {
     let list = users;
     if (debouncedQuery.trim()) {
@@ -161,35 +250,30 @@ export const UserTable: React.FC<UserTableProps> = ({
     return list;
   }, [users, debouncedQuery, maxFollowers, minFollowers, hideUnknownCounts, hasCountFilter]);
 
-  // NOT: X API değişiklikleri nedeniyle takipçi sayıları artık toplu 
-  // listelerde gönderilmemektedir. Bu yüzden kullanıcı sayı filtresi
-  // aktif ettiğinde otomatik olarak bilinmeyenleri GİZLEMİYORUZ (hepsi kaybolmasın diye).
-
   useEffect(() => {
     setCurrentPage(1);
   }, [maxFollowers, minFollowers, hideUnknownCounts, debouncedQuery]);
 
-  // Sayfalama
   const totalPages = Math.max(1, Math.ceil(filteredUsers.length / PAGE_SIZE));
   const paginatedUsers = useMemo(() => {
     const start = (currentPage - 1) * PAGE_SIZE;
     return filteredUsers.slice(start, start + PAGE_SIZE);
   }, [filteredUsers, currentPage]);
 
-  const allPageSelected = paginatedUsers.length > 0 && paginatedUsers.every(u => selectedIds.has(u.id));
-  const someSelected = paginatedUsers.some(u => selectedIds.has(u.id));
+  const allPageSelected =
+    paginatedUsers.length > 0 && paginatedUsers.every((u) => selectedIds.has(u.id));
+  const someSelected = paginatedUsers.some((u) => selectedIds.has(u.id));
   const allFilteredSelected =
     filteredUsers.length > 0 && filteredUsers.every((u) => selectedIds.has(u.id));
 
   const toggleSelectAll = () => {
     if (allPageSelected) {
-      // Sadece bu sayfadakileri kaldır
       const newSet = new Set(selectedIds);
-      paginatedUsers.forEach(u => newSet.delete(u.id));
+      paginatedUsers.forEach((u) => newSet.delete(u.id));
       setSelectedIds(newSet);
     } else {
       const newSet = new Set(selectedIds);
-      paginatedUsers.forEach(u => newSet.add(u.id));
+      paginatedUsers.forEach((u) => newSet.add(u.id));
       setSelectedIds(newSet);
     }
   };
@@ -212,26 +296,164 @@ export const UserTable: React.FC<UserTableProps> = ({
     setSelectedIds(newSet);
   };
 
-  // Tüm seçili kullanıcılar (tüm sayfalardan)
-  const allSelectedUsers = users.filter(u => selectedIds.has(u.id));
-  const selectedFollowing = allSelectedUsers.filter(u => u.isFollowing);
-  const selectedNotFollowing = allSelectedUsers.filter(u => !u.isFollowing);
+  const allSelectedUsers = users.filter((u) => selectedIds.has(u.id));
+  const selectedFollowing = allSelectedUsers.filter((u) => u.isFollowing);
+  const selectedNotFollowing = allSelectedUsers.filter((u) => !u.isFollowing);
 
-  const handleBulkUnfollow = () => {
-    if (onBulkUnfollow && selectedFollowing.length > 0) {
-      const confirmed = confirm(`${selectedFollowing.length} ${lang === 'tr' ? 'kişiyi takipten çıkarmak istediğinize emin misiniz?' : 'users will be unfollowed. Are you sure?'}`);
-      if (confirmed) {
-        onBulkUnfollow(selectedFollowing.map(u => u.username));
-        setSelectedIds(new Set());
-      }
+  // ═══════════════════════════════════════════════════════════
+  // GELİŞMİŞ ANTİ-BAN TOPLU TAKİPTEN ÇIKARMA MOTORU
+  // ═══════════════════════════════════════════════════════════
+  const handleBulkUnfollowWithAntiBan = async () => {
+    if (selectedFollowing.length === 0 || isBulkRunning) return;
+
+    // Günlük limit kontrolü
+    if (settings.dailyLimit > 0 && settings.dailyCount >= settings.dailyLimit) {
+      alert(ut.dailyLimitReached(settings.dailyLimit));
+      return;
     }
+
+    const confirmed = confirm(
+      lang === 'tr'
+        ? `${selectedFollowing.length} hesabı Anti-Ban korumasıyla (rastgele ${settings.minDelaySeconds}-${settings.maxDelaySeconds}s aralıklarla) takipten çıkarmak istediğinize emin misiniz?`
+        : `Unfollow ${selectedFollowing.length} users with Anti-Ban protection (random ${settings.minDelaySeconds}-${settings.maxDelaySeconds}s delays)?`
+    );
+    if (!confirmed) return;
+
+    setIsBulkRunning(true);
+    setIsResting(false);
+    bulkAbortRef.current = false;
+    setBulkProgressState({ current: 0, total: selectedFollowing.length });
+
+    let done = 0;
+    let failed = 0;
+    let batchConsecutive = 0;
+
+    try {
+      for (let i = 0; i < selectedFollowing.length; i++) {
+        if (bulkAbortRef.current) break;
+
+        // Günlük limit kontrolü
+        if (settings.dailyLimit > 0 && settings.dailyCount + done >= settings.dailyLimit) {
+          setBulkStatusText(ut.dailyLimitReached(settings.dailyLimit));
+          break;
+        }
+
+        const user = selectedFollowing[i];
+        setBulkProgressState({ current: i + 1, total: selectedFollowing.length });
+        setBulkStatusText(ut.unfollowingAccount(user.username, i + 1, selectedFollowing.length));
+
+        try {
+          // Doğrudan API ile takipten çıkar (Sekme açıp kapatmaz, çok daha hızlı ve stabildir)
+          await unfollowersService.unfollowUser({ id: user.id, username: user.username });
+          done++;
+          batchConsecutive++;
+
+          const newCount = await unfollowersService.incrementDailyCount();
+          setSettings((prev) => ({ ...prev, dailyCount: newCount }));
+
+          // Listeden ve Zustand store'dan düş
+          await applyUnfollow(user.username);
+          setSelectedIds((prev) => {
+            const next = new Set(prev);
+            next.delete(user.id);
+            return next;
+          });
+        } catch (err: any) {
+          failed++;
+          console.warn(`Unfollow @${user.username} failed:`, err);
+
+          if (err?.status === 429) {
+            setBulkStatusText(ut.rateLimitWarning);
+            await new Promise((r) => setTimeout(r, 60000));
+            i--;
+            continue;
+          }
+
+          // Fallback tekil unfollow fonksiyonu
+          if (onUnfollow) {
+            try {
+              const res = await onUnfollow(user.username);
+              if (res) {
+                done++;
+                batchConsecutive++;
+              }
+            } catch (_) {}
+          }
+        }
+
+        if (i < selectedFollowing.length - 1 && !bulkAbortRef.current) {
+          // 1. Dinlenme Molası (Anti-Bot Rest Cooldown)
+          if (
+            settings.enableBatchCooldown &&
+            settings.batchSize > 0 &&
+            batchConsecutive >= settings.batchSize
+          ) {
+            batchConsecutive = 0;
+            setIsResting(true);
+            const cooldownEndTime = Date.now() + settings.cooldownSeconds * 1000;
+
+            while (Date.now() < cooldownEndTime) {
+              if (bulkAbortRef.current) break;
+              const rem = Math.max(1, Math.ceil((cooldownEndTime - Date.now()) / 1000));
+              setBulkCountdown(rem);
+              setBulkStatusText(ut.restingCooldown(rem, done));
+              await new Promise((r) => setTimeout(r, 250));
+            }
+
+            setIsResting(false);
+            if (bulkAbortRef.current) break;
+          }
+
+          // 2. Rastgele İnsansı Aralık (Dynamic Jittered Delay)
+          const delayMs = unfollowersService.calculateDelayMs(
+            settings.minDelaySeconds,
+            settings.maxDelaySeconds,
+            settings.jitter
+          );
+          const endTime = Date.now() + delayMs;
+
+          while (Date.now() < endTime) {
+            if (bulkAbortRef.current) break;
+            const rem = Math.max(1, Math.ceil((endTime - Date.now()) / 1000));
+            setBulkCountdown(rem);
+            await new Promise((r) => setTimeout(r, 200));
+          }
+          setBulkCountdown(null);
+        }
+      }
+
+      if (bulkAbortRef.current) {
+        setBulkStatusText(ut.stoppedMessage(done, failed));
+      } else {
+        setBulkStatusText(ut.completedMessage(done, failed));
+      }
+    } finally {
+      setIsBulkRunning(false);
+      setIsResting(false);
+      setBulkCountdown(null);
+      setTimeout(() => {
+        setBulkProgressState(null);
+        setBulkStatusText('');
+      }, 5000);
+    }
+  };
+
+  const handleStopBulkUnfollow = () => {
+    bulkAbortRef.current = true;
+    setBulkStatusText(translations[lang].scan.stopping);
   };
 
   const handleBulkFollow = () => {
     if (onBulkFollow && selectedNotFollowing.length > 0) {
-      const confirmed = confirm(`${selectedNotFollowing.length} ${lang === 'tr' ? 'kişiyi takip etmek istediğinize emin misiniz?' : 'users will be followed. Are you sure?'}`);
+      const confirmed = confirm(
+        `${selectedNotFollowing.length} ${
+          lang === 'tr'
+            ? 'kişiyi takip etmek istediğinize emin misiniz?'
+            : 'users will be followed. Are you sure?'
+        }`
+      );
       if (confirmed) {
-        onBulkFollow(selectedNotFollowing.map(u => u.username));
+        onBulkFollow(selectedNotFollowing.map((u) => u.username));
         setSelectedIds(new Set());
       }
     }
@@ -241,13 +463,195 @@ export const UserTable: React.FC<UserTableProps> = ({
     <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
       {/* Header */}
       <div className="p-6 border-b border-gray-100">
-        <div className="flex justify-between items-center mb-4">
-          <h3 className="text-lg font-bold text-gray-900">{title}</h3>
-          <span className="bg-gray-100 text-gray-700 text-sm font-medium px-3 py-1 rounded-full">
-            {filteredUsers.length}
-            {filteredUsers.length !== users.length ? ` / ${users.length}` : ''} {t.userCount}
-          </span>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+          <div className="flex items-center gap-3">
+            <h3 className="text-lg font-bold text-gray-900">{title}</h3>
+            <span className="bg-gray-100 text-gray-700 text-sm font-medium px-3 py-1 rounded-full">
+              {filteredUsers.length}
+              {filteredUsers.length !== users.length ? ` / ${users.length}` : ''} {t.userCount}
+            </span>
+          </div>
+
+          {/* Anti-Ban & Güvenlik Butonu */}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowSettingsModal(!showSettingsModal)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all ${
+                showSettingsModal
+                  ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                  : 'bg-gray-50 hover:bg-gray-100 text-gray-700 border-gray-200'
+              }`}
+            >
+              <Shield size={14} className={showSettingsModal ? 'text-white' : 'text-blue-600'} />
+              <span>{ut.safety.title}</span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-800 font-bold">
+                {settings.minDelaySeconds}-{settings.maxDelaySeconds}s
+              </span>
+            </button>
+          </div>
         </div>
+
+        {/* Anti-Ban Güvenlik Açılır Paneli */}
+        {showSettingsModal && (
+          <div className="mb-4 p-4 bg-slate-900 text-white rounded-xl shadow-md space-y-3 text-xs">
+            <div className="flex items-center justify-between pb-2 border-b border-white/10">
+              <span className="font-bold text-sm text-blue-300 flex items-center gap-1.5">
+                <Shield size={16} />
+                {ut.safety.title}
+              </span>
+              <span className="text-[11px] text-slate-400">
+                {settings.safetyPreset === 'safe'
+                  ? ut.safety.presetSafe
+                  : settings.safetyPreset === 'balanced'
+                  ? ut.safety.presetBalanced
+                  : settings.safetyPreset === 'fast'
+                  ? ut.safety.presetFast
+                  : ut.safety.presetCustom}
+              </span>
+            </div>
+
+            {/* Hazır Güvenlik Profilleri */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {[
+                { id: 'safe' as const, title: '🛡️ Ultra Güvenli', desc: '25-50s + 3 dk mola' },
+                { id: 'balanced' as const, title: '⚖️ Standart', desc: '15-30s + 2 dk mola' },
+                { id: 'fast' as const, title: '⚡ Hızlı', desc: '8-15s (molasız)' },
+                { id: 'custom' as const, title: '⚙️ Özel', desc: 'Manuel süreler' },
+              ].map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => applySafetyPreset(p.id)}
+                  className={`p-2.5 rounded-lg border text-left transition-all ${
+                    settings.safetyPreset === p.id
+                      ? 'bg-blue-600/30 border-blue-400 text-white font-bold ring-1 ring-blue-400'
+                      : 'bg-white/5 border-white/10 text-slate-300 hover:bg-white/10'
+                  }`}
+                >
+                  <div className="font-semibold text-xs">{p.title}</div>
+                  <div className="text-[10px] text-slate-400 mt-0.5">{p.desc}</div>
+                </button>
+              ))}
+            </div>
+
+            {/* Süre ve Mola Girişleri */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-2 border-t border-white/10">
+              <div className="bg-white/5 p-2.5 rounded-lg border border-white/10">
+                <span className="text-[11px] text-slate-300 font-medium block mb-1">
+                  Rastgele Aralık (sn):
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="number"
+                    min="3"
+                    max="600"
+                    value={settings.minDelaySeconds}
+                    onChange={(e) =>
+                      handleUpdateSettings({
+                        safetyPreset: 'custom',
+                        minDelaySeconds: Math.max(3, parseInt(e.target.value, 10) || 5),
+                      })
+                    }
+                    className="w-16 bg-black/40 border border-white/20 rounded px-2 py-1 text-white font-bold text-xs"
+                  />
+                  <span>-</span>
+                  <input
+                    type="number"
+                    min="5"
+                    max="600"
+                    value={settings.maxDelaySeconds}
+                    onChange={(e) =>
+                      handleUpdateSettings({
+                        safetyPreset: 'custom',
+                        maxDelaySeconds: Math.max(5, parseInt(e.target.value, 10) || 10),
+                      })
+                    }
+                    className="w-16 bg-black/40 border border-white/20 rounded px-2 py-1 text-white font-bold text-xs"
+                  />
+                </div>
+              </div>
+
+              <div className="bg-white/5 p-2.5 rounded-lg border border-white/10">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[11px] text-slate-300 font-medium">Güvenlik Molası:</span>
+                  <input
+                    type="checkbox"
+                    checked={settings.enableBatchCooldown}
+                    onChange={(e) =>
+                      handleUpdateSettings({
+                        safetyPreset: 'custom',
+                        enableBatchCooldown: e.target.checked,
+                      })
+                    }
+                    className="w-3.5 h-3.5 accent-blue-500 rounded cursor-pointer"
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-slate-400">Her</span>
+                  <input
+                    type="number"
+                    min="5"
+                    max="100"
+                    disabled={!settings.enableBatchCooldown}
+                    value={settings.batchSize}
+                    onChange={(e) =>
+                      handleUpdateSettings({
+                        safetyPreset: 'custom',
+                        batchSize: Math.max(5, parseInt(e.target.value, 10) || 15),
+                      })
+                    }
+                    className="w-12 bg-black/40 border border-white/20 rounded px-1.5 py-1 text-white font-bold text-xs disabled:opacity-30"
+                  />
+                  <span className="text-[10px] text-slate-400">kişide,</span>
+                  <input
+                    type="number"
+                    min="10"
+                    max="600"
+                    disabled={!settings.enableBatchCooldown}
+                    value={settings.cooldownSeconds}
+                    onChange={(e) =>
+                      handleUpdateSettings({
+                        safetyPreset: 'custom',
+                        cooldownSeconds: Math.max(10, parseInt(e.target.value, 10) || 180),
+                      })
+                    }
+                    className="w-14 bg-black/40 border border-white/20 rounded px-1.5 py-1 text-white font-bold text-xs disabled:opacity-30"
+                  />
+                  <span className="text-[10px] text-slate-400">sn</span>
+                </div>
+              </div>
+
+              <div className="bg-white/5 p-2.5 rounded-lg border border-white/10 flex flex-col justify-between">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] text-slate-300 font-medium">Günlük Limit:</span>
+                  <input
+                    type="number"
+                    min="0"
+                    max="1000"
+                    value={settings.dailyLimit}
+                    onChange={(e) =>
+                      handleUpdateSettings({
+                        dailyLimit: Math.max(0, parseInt(e.target.value, 10) || 0),
+                      })
+                    }
+                    className="w-16 bg-black/40 border border-white/20 rounded px-2 py-1 text-white font-bold text-xs"
+                  />
+                </div>
+                <div className="flex items-center justify-between mt-1 text-[10px] text-slate-400">
+                  <span>İnsan sapması (±%15):</span>
+                  <input
+                    type="checkbox"
+                    checked={settings.jitter}
+                    onChange={(e) => handleUpdateSettings({ jitter: e.target.checked })}
+                    className="w-3.5 h-3.5 accent-blue-500 rounded cursor-pointer"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="relative mb-3">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
           <input
@@ -275,7 +679,6 @@ export const UserTable: React.FC<UserTableProps> = ({
                   } else {
                     setMaxFollowersInput(String(n));
                     setMinFollowersInput('');
-                    // hideUnknownCounts'u zorla değiştirme: kullanıcı elle seçer
                   }
                 }}
                 className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
@@ -306,9 +709,7 @@ export const UserTable: React.FC<UserTableProps> = ({
             />
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-gray-500">
-              {t.maxFollowers}
-            </span>
+            <span className="text-xs font-medium text-gray-500">{t.maxFollowers}</span>
             <input
               type="number"
               min={0}
@@ -367,9 +768,7 @@ export const UserTable: React.FC<UserTableProps> = ({
             <>
               {' '}
               {t.scanNoteCount(countStats.known, countStats.total)}
-              {countStats.known === 0
-                ? t.scanNoteRescan
-                : '.'}
+              {countStats.known === 0 ? t.scanNoteRescan : '.'}
             </>
           )}
         </p>
@@ -407,12 +806,15 @@ export const UserTable: React.FC<UserTableProps> = ({
                 {sorsaLoading && <Loader2 size={12} className="animate-spin" />}
                 {sorsaLoading && sorsaProgress
                   ? `${lang === 'tr' ? 'Çekiliyor' : 'Fetching'} (${sorsaProgress.fetched}/${sorsaProgress.total})`
-                  : lang === 'tr' ? 'Sorsa API ile Sayıları Çek' : 'Fetch with Sorsa API'}
+                  : lang === 'tr'
+                  ? 'Sorsa API ile Sayıları Çek'
+                  : 'Fetch with Sorsa API'}
               </button>
             </div>
           </div>
         </div>
       )}
+
       {/* Count filtresi aktif ama bilinmeyenler gösteriliyorsa bilgi */}
       {hasCountFilter && unknownCountInFilter > 0 && !hideUnknownCounts && (
         <div className="mx-6 mt-3 mb-1 flex items-center justify-between gap-2 bg-blue-50 border border-blue-200 rounded-lg px-4 py-2.5">
@@ -441,12 +843,13 @@ export const UserTable: React.FC<UserTableProps> = ({
               {sorsaLoading && <Loader2 size={12} className="animate-spin" />}
               {sorsaLoading && sorsaProgress
                 ? `${lang === 'tr' ? 'Çekiliyor' : 'Fetching'} (${sorsaProgress.fetched}/${sorsaProgress.total})`
-                : lang === 'tr' ? 'Sorsa API ile Sayıları Çek' : 'Fetch with Sorsa API'}
+                : lang === 'tr'
+                ? 'Sorsa API ile Sayıları Çek'
+                : 'Fetch with Sorsa API'}
             </button>
           </div>
         </div>
       )}
-
 
       {/* Toplu İşlem Barı */}
       {selectedIds.size > 0 && (
@@ -454,21 +857,22 @@ export const UserTable: React.FC<UserTableProps> = ({
           <span className="text-sm font-medium text-blue-800">
             {t.selectedCount(selectedIds.size)}
           </span>
-          <div className="flex gap-2">
-            {selectedFollowing.length > 0 && onBulkUnfollow && (
+          <div className="flex items-center gap-2">
+            {selectedFollowing.length > 0 && (
               <button
-                onClick={handleBulkUnfollow}
-                disabled={!!bulkProgress}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 text-white text-xs font-medium rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                onClick={handleBulkUnfollowWithAntiBan}
+                disabled={isBulkRunning}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 text-white text-xs font-semibold rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-xs"
               >
                 <UserMinus size={14} />
                 {t.unfollow} ({selectedFollowing.length})
+                <span className="ml-1 text-[10px] px-1 py-0.2 bg-red-800/60 rounded">Anti-Ban</span>
               </button>
             )}
             {selectedNotFollowing.length > 0 && onBulkFollow && (
               <button
                 onClick={handleBulkFollow}
-                disabled={!!bulkProgress}
+                disabled={isBulkRunning}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <UserPlus size={14} />
@@ -477,6 +881,7 @@ export const UserTable: React.FC<UserTableProps> = ({
             )}
             <button
               onClick={() => setSelectedIds(new Set())}
+              disabled={isBulkRunning}
               className="px-3 py-1.5 bg-white text-gray-600 text-xs font-medium rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors"
             >
               {t.clearSelection}
@@ -485,21 +890,60 @@ export const UserTable: React.FC<UserTableProps> = ({
         </div>
       )}
 
-      {/* Toplu İşlem İlerleme */}
-      {bulkProgress && (
-        <div className="px-6 py-3 bg-amber-50 border-b border-amber-100">
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-2 text-sm font-medium text-amber-800">
-              <Loader2 size={14} className="animate-spin" />
-              {t.processing} {bulkProgress.current}/{bulkProgress.total}
+      {/* Toplu İşlem Anti-Ban İlerleme ve Canlı Geri Sayım Barı */}
+      {(isBulkRunning || bulkProgressState || bulkStatusText) && (
+        <div
+          className={`px-6 py-3 border-b flex flex-col gap-2 transition-all ${
+            isResting
+              ? 'bg-amber-50 border-amber-200 text-amber-900'
+              : 'bg-blue-50 border-blue-200 text-blue-900'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-sm font-medium">
+              {isBulkRunning && <Loader2 size={15} className="animate-spin text-blue-600" />}
+              {isResting && <Coffee size={15} className="text-amber-600 animate-bounce" />}
+              <span>{bulkStatusText || `${t.processing} ${bulkProgressState?.current || 0}/${bulkProgressState?.total || 0}`}</span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              {bulkCountdown !== null && (
+                <span
+                  className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${
+                    isResting
+                      ? 'bg-amber-600 text-white animate-pulse'
+                      : 'bg-blue-600 text-white'
+                  }`}
+                >
+                  {isResting ? `☕ ${bulkCountdown} sn Mola` : `${bulkCountdown} sn`}
+                </span>
+              )}
+
+              {isBulkRunning && (
+                <button
+                  type="button"
+                  onClick={handleStopBulkUnfollow}
+                  className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors shadow-xs"
+                >
+                  <StopCircle size={13} />
+                  <span>{ut.stopButton}</span>
+                </button>
+              )}
             </div>
           </div>
-          <div className="w-full bg-amber-200 rounded-full h-1.5">
-            <div 
-              className="bg-amber-600 h-1.5 rounded-full transition-all duration-300"
-              style={{ width: `${bulkProgress.total > 0 ? (bulkProgress.current / bulkProgress.total) * 100 : 0}%` }}
-            />
-          </div>
+
+          {bulkProgressState && bulkProgressState.total > 0 && (
+            <div className="w-full bg-blue-200/60 rounded-full h-1.5 overflow-hidden">
+              <div
+                className={`h-1.5 rounded-full transition-all duration-300 ${
+                  isResting ? 'bg-amber-600' : 'bg-blue-600'
+                }`}
+                style={{
+                  width: `${Math.min(100, Math.round((bulkProgressState.current / bulkProgressState.total) * 100))}%`,
+                }}
+              />
+            </div>
+          )}
         </div>
       )}
 
@@ -509,10 +953,17 @@ export const UserTable: React.FC<UserTableProps> = ({
           <thead className="bg-gray-50/80 text-gray-500 font-medium border-b border-gray-100">
             <tr>
               <th className="pl-6 pr-2 py-4 w-10">
-                <button onClick={toggleSelectAll} className="text-gray-400 hover:text-gray-700 transition-colors">
-                  {allPageSelected ? <CheckSquare size={18} className="text-blue-600" /> : 
-                   someSelected ? <MinusSquare size={18} className="text-blue-400" /> : 
-                   <Square size={18} />}
+                <button
+                  onClick={toggleSelectAll}
+                  className="text-gray-400 hover:text-gray-700 transition-colors"
+                >
+                  {allPageSelected ? (
+                    <CheckSquare size={18} className="text-blue-600" />
+                  ) : someSelected ? (
+                    <MinusSquare size={18} className="text-blue-400" />
+                  ) : (
+                    <Square size={18} />
+                  )}
                 </button>
               </th>
               <th className="px-4 py-4">{t.colUser}</th>
@@ -536,28 +987,42 @@ export const UserTable: React.FC<UserTableProps> = ({
                 const isProcessing = actionInProgress === user.username;
 
                 return (
-                  <tr 
-                    key={user.id} 
-                    className={`transition-colors ${isSelected ? 'bg-blue-50/50' : 'hover:bg-gray-50/50'} ${isProcessing ? 'opacity-60' : ''}`}
+                  <tr
+                    key={user.id}
+                    className={`transition-colors ${
+                      isSelected ? 'bg-blue-50/50' : 'hover:bg-gray-50/50'
+                    } ${isProcessing ? 'opacity-60' : ''}`}
                   >
                     <td className="pl-6 pr-2 py-3">
-                      <button onClick={() => toggleSelect(user.id)} className="text-gray-400 hover:text-gray-700 transition-colors">
-                        {isSelected ? <CheckSquare size={18} className="text-blue-600" /> : <Square size={18} />}
+                      <button
+                        onClick={() => toggleSelect(user.id)}
+                        className="text-gray-400 hover:text-gray-700 transition-colors"
+                      >
+                        {isSelected ? (
+                          <CheckSquare size={18} className="text-blue-600" />
+                        ) : (
+                          <Square size={18} />
+                        )}
                       </button>
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center space-x-3">
-                        <img 
-                          src={user.avatarUrl || 'https://abs.twimg.com/sticky/default_profile_images/default_profile_normal.png'} 
-                          alt={user.displayName} 
+                        <img
+                          src={
+                            user.avatarUrl ||
+                            'https://abs.twimg.com/sticky/default_profile_images/default_profile_normal.png'
+                          }
+                          alt={user.displayName}
                           className="w-9 h-9 rounded-full border border-gray-200 flex-shrink-0"
                         />
                         <div className="min-w-0">
-                          <div className="font-semibold text-gray-900 truncate text-sm">{user.displayName}</div>
-                          <a 
-                            href={`https://x.com/${user.username}`} 
-                            target="_blank" 
-                            rel="noreferrer" 
+                          <div className="font-semibold text-gray-900 truncate text-sm">
+                            {user.displayName}
+                          </div>
+                          <a
+                            href={`https://x.com/${user.username}`}
+                            target="_blank"
+                            rel="noreferrer"
                             className="text-blue-600 hover:underline text-xs"
                           >
                             @{user.username}
@@ -595,10 +1060,24 @@ export const UserTable: React.FC<UserTableProps> = ({
                         <Loader2 size={16} className="animate-spin text-gray-400 inline-block" />
                       ) : (
                         <div className="flex gap-1.5 justify-end">
-                          {user.isFollowing && onUnfollow && (
+                          {user.isFollowing && (
                             <button
-                              onClick={() => onUnfollow(user.username)}
-                              disabled={!!actionInProgress}
+                              onClick={async () => {
+                                if (onUnfollow) {
+                                  await onUnfollow(user.username);
+                                } else {
+                                  try {
+                                    await unfollowersService.unfollowUser({
+                                      id: user.id,
+                                      username: user.username,
+                                    });
+                                    await applyUnfollow(user.username);
+                                  } catch (e: any) {
+                                    alert('Hata: ' + e?.message);
+                                  }
+                                }
+                              }}
+                              disabled={!!actionInProgress || isBulkRunning}
                               title={t.titleUnfollow}
                               className="p-1.5 text-red-500 hover:bg-red-50 rounded-md transition-colors disabled:opacity-30"
                             >
@@ -608,7 +1087,7 @@ export const UserTable: React.FC<UserTableProps> = ({
                           {!user.isFollowing && onFollow && (
                             <button
                               onClick={() => onFollow(user.username)}
-                              disabled={!!actionInProgress}
+                              disabled={!!actionInProgress || isBulkRunning}
                               title={t.titleFollow}
                               className="p-1.5 text-blue-500 hover:bg-blue-50 rounded-md transition-colors disabled:opacity-30"
                             >
@@ -630,38 +1109,40 @@ export const UserTable: React.FC<UserTableProps> = ({
       {totalPages > 1 && (
         <div className="px-6 py-4 border-t border-gray-100 flex items-center justify-between">
           <span className="text-sm text-gray-500">
-            {((currentPage - 1) * PAGE_SIZE) + 1}–{Math.min(currentPage * PAGE_SIZE, filteredUsers.length)} / {filteredUsers.length}
+            {(currentPage - 1) * PAGE_SIZE + 1}–
+            {Math.min(currentPage * PAGE_SIZE, filteredUsers.length)} / {filteredUsers.length}
           </span>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
               disabled={currentPage === 1}
               className="p-1.5 rounded-md border border-gray-200 hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             >
               <ChevronLeft size={16} />
             </button>
-            
-            {/* Sayfa numaraları */}
-            {generatePageNumbers(currentPage, totalPages).map((page, i) => (
+
+            {generatePageNumbers(currentPage, totalPages).map((page, i) =>
               page === '...' ? (
-                <span key={`dots-${i}`} className="px-1 text-gray-400 text-sm">...</span>
+                <span key={`dots-${i}`} className="px-1 text-gray-400 text-sm">
+                  ...
+                </span>
               ) : (
                 <button
                   key={page}
                   onClick={() => setCurrentPage(page as number)}
                   className={`w-8 h-8 rounded-md text-sm font-medium transition-colors ${
-                    currentPage === page 
-                      ? 'bg-gray-900 text-white' 
+                    currentPage === page
+                      ? 'bg-gray-900 text-white'
                       : 'hover:bg-gray-100 text-gray-600'
                   }`}
                 >
                   {page}
                 </button>
               )
-            ))}
+            )}
 
             <button
-              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
               disabled={currentPage === totalPages}
               className="p-1.5 rounded-md border border-gray-200 hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             >
@@ -677,9 +1158,9 @@ export const UserTable: React.FC<UserTableProps> = ({
 /** Sayfa numarası üretici: 1 ... 4 5 [6] 7 8 ... 150 */
 function generatePageNumbers(current: number, total: number): (number | string)[] {
   if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
-  
+
   const pages: (number | string)[] = [];
-  
+
   if (current <= 4) {
     for (let i = 1; i <= 5; i++) pages.push(i);
     pages.push('...');
@@ -695,6 +1176,6 @@ function generatePageNumbers(current: number, total: number): (number | string)[
     pages.push('...');
     pages.push(total);
   }
-  
+
   return pages;
 }
