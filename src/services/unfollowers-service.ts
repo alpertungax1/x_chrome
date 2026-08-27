@@ -58,7 +58,14 @@ export class UnfollowersService {
       const dailyCount = s.dailyDate === today ? Number(s.dailyCount) || 0 : 0;
       return {
         delaySeconds: Math.min(600, Math.max(5, Number(s.delaySeconds) || 30)),
+        minDelaySeconds: Math.min(600, Math.max(3, Number(s.minDelaySeconds) || 20)),
+        maxDelaySeconds: Math.min(600, Math.max(5, Number(s.maxDelaySeconds) || 45)),
         jitter: s.jitter !== false,
+        safetyPreset: s.safetyPreset || 'safe',
+        enableBatchCooldown: s.enableBatchCooldown !== false,
+        batchSize: Math.max(5, Number(s.batchSize) || 15),
+        cooldownSeconds: Math.max(10, Number(s.cooldownSeconds) || 180),
+        dailyLimit: Number(s.dailyLimit) || 150,
         whitelist: Array.isArray(s.whitelist) ? s.whitelist : [],
         dailyDate: today,
         dailyCount,
@@ -66,7 +73,14 @@ export class UnfollowersService {
     } catch {
       return {
         delaySeconds: 30,
+        minDelaySeconds: 20,
+        maxDelaySeconds: 45,
         jitter: true,
+        safetyPreset: 'safe',
+        enableBatchCooldown: true,
+        batchSize: 15,
+        cooldownSeconds: 180,
+        dailyLimit: 150,
         whitelist: [],
         dailyDate: getTodayString(),
         dailyCount: 0,
@@ -275,10 +289,27 @@ export class UnfollowersService {
     return true;
   }
 
-  public calculateDelayMs(delaySeconds: number, jitter: boolean): number {
-    const base = Math.max(5, delaySeconds) * 1000;
-    if (!jitter) return base;
-    return Math.round(base * (0.8 + Math.random() * 0.4));
+  /**
+   * Anti-Ban & Doğal İnsan Davranışı Simülasyonlu Rastgele Süre Hesaplayıcı
+   */
+  public calculateDelayMs(
+    minSeconds: number,
+    maxSeconds: number,
+    jitter: boolean = true
+  ): number {
+    const min = Math.max(3, Math.min(minSeconds, maxSeconds));
+    const max = Math.max(min, maxSeconds);
+
+    // Uniform random in range [min, max]
+    let chosenSec = min + Math.random() * (max - min);
+
+    // Organik insan jitter'ı (±%15)
+    if (jitter) {
+      const jitterFactor = 0.85 + Math.random() * 0.3;
+      chosenSec = chosenSec * jitterFactor;
+    }
+
+    return Math.round(Math.max(3000, chosenSec * 1000));
   }
 }
 

@@ -19,8 +19,11 @@ import {
   ChevronsLeft,
   ChevronsRight,
   RotateCcw,
+  Shield,
+  Coffee,
+  AlertTriangle,
 } from 'lucide-react';
-import { UnfollowerUser, UnfollowersSettings } from '../types/unfollowers';
+import { UnfollowerUser, UnfollowersSettings, SafetyPreset } from '../types/unfollowers';
 import { unfollowersService } from '../services/unfollowers-service';
 import { useAppStore } from '../store/app-store';
 import { translations, Language } from '../i18n';
@@ -49,7 +52,14 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
   const [whitelistIds, setWhitelistIds] = useState<Set<string>>(new Set());
   const [settings, setSettings] = useState<UnfollowersSettings>({
     delaySeconds: 30,
+    minDelaySeconds: 20,
+    maxDelaySeconds: 45,
     jitter: true,
+    safetyPreset: 'safe',
+    enableBatchCooldown: true,
+    batchSize: 15,
+    cooldownSeconds: 180,
+    dailyLimit: 150,
     whitelist: [],
     dailyDate: '',
     dailyCount: 0,
@@ -58,10 +68,12 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
   // İşlem State'leri
   const [isScanning, setIsScanning] = useState(false);
   const [isUnfollowing, setIsUnfollowing] = useState(false);
+  const [isResting, setIsResting] = useState(false);
   const [statusText, setStatusText] = useState('');
   const [statusType, setStatusType] = useState<'info' | 'warn' | 'ok' | 'err'>('info');
   const [progressPercent, setProgressPercent] = useState<number | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
+  const [currentDelayRangeText, setCurrentDelayRangeText] = useState<string>('');
 
   // Arama, Sekme, Filtre & Sıralama
   const [searchQuery, setSearchQuery] = useState('');
@@ -119,6 +131,41 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
     const updated = { ...settings, ...updates };
     setSettings(updated);
     await unfollowersService.saveSettings(updates);
+  };
+
+  // Güvenlik profili değiştirme
+  const applySafetyPreset = async (preset: SafetyPreset) => {
+    let updates: Partial<UnfollowersSettings> = { safetyPreset: preset };
+    if (preset === 'safe') {
+      updates = {
+        ...updates,
+        minDelaySeconds: 25,
+        maxDelaySeconds: 50,
+        jitter: true,
+        enableBatchCooldown: true,
+        batchSize: 15,
+        cooldownSeconds: 180,
+      };
+    } else if (preset === 'balanced') {
+      updates = {
+        ...updates,
+        minDelaySeconds: 15,
+        maxDelaySeconds: 30,
+        jitter: true,
+        enableBatchCooldown: true,
+        batchSize: 20,
+        cooldownSeconds: 120,
+      };
+    } else if (preset === 'fast') {
+      updates = {
+        ...updates,
+        minDelaySeconds: 8,
+        maxDelaySeconds: 15,
+        jitter: true,
+        enableBatchCooldown: false,
+      };
+    }
+    await handleUpdateSettings(updates);
   };
 
   // Yıldız / Koruma listesi toggle
@@ -202,7 +249,7 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
   };
 
   // ═══════════════════════════════════════════════════════════
-  // TARAMA MOTORU (0xAnubiss Direct API Scan)
+  // TARAMA MOTORU (Direct API Scan)
   // ═══════════════════════════════════════════════════════════
   const handleStartScan = async () => {
     if (isScanning || isUnfollowing) return;
@@ -257,7 +304,7 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
   };
 
   // ═══════════════════════════════════════════════════════════
-  // TAKİPTEN ÇIKARMA MOTORU (Delayed & Jittered Unfollow)
+  // GELİŞMİŞ TAKİPTEN ÇIKARMA MOTORU (Anti-Ban & Dynamic Jitter)
   // ═══════════════════════════════════════════════════════════
   const handleStartUnfollow = async () => {
     if (isUnfollowing || isScanning) return;
@@ -271,25 +318,40 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
       return;
     }
 
-    if (settings.delaySeconds < 15) {
+    // Günlük limit kontrolü
+    if (settings.dailyLimit > 0 && settings.dailyCount >= settings.dailyLimit) {
+      alert(t.dailyLimitReached(settings.dailyLimit));
+      return;
+    }
+
+    if (settings.minDelaySeconds < 10) {
       const ok = window.confirm(
         lang === 'tr'
-          ? `Aralık süresi ${settings.delaySeconds} saniye olarak ayarlanmış. X kısıtlama riskini önlemek için 30+ saniye önerilir. Yine de devam etmek istiyor musunuz?`
-          : `Delay is set to ${settings.delaySeconds}s. 30+ seconds is recommended to reduce restriction risk. Continue anyway?`
+          ? `Minimum bekleme süresi ${settings.minDelaySeconds} saniye olarak ayarlanmış. X kısıtlama riskini önlemek için 20+ saniye önerilir. Yine de devam etmek istiyor musunuz?`
+          : `Min delay is set to ${settings.minDelaySeconds}s. 20+ seconds is recommended to prevent restriction risk. Continue anyway?`
       );
       if (!ok) return;
     }
 
     setIsUnfollowing(true);
+    setIsResting(false);
     unfollowAbortRef.current = false;
     setStatusType('info');
 
     let done = 0;
     let failed = 0;
+    let batchConsecutiveCount = 0;
 
     try {
       for (let i = 0; i < targets.length; i++) {
         if (unfollowAbortRef.current) break;
+
+        // Günlük limit kontrolü
+        if (settings.dailyLimit > 0 && settings.dailyCount + done >= settings.dailyLimit) {
+          setStatusText(t.dailyLimitReached(settings.dailyLimit));
+          setStatusType('warn');
+          break;
+        }
 
         const user = targets[i];
         setStatusText(t.unfollowingAccount(user.username, i + 1, targets.length));
@@ -298,6 +360,7 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
         try {
           await unfollowersService.unfollowUser(user);
           done++;
+          batchConsecutiveCount++;
 
           const newCount = await unfollowersService.incrementDailyCount();
           setSettings((prev) => ({ ...prev, dailyCount: newCount }));
@@ -333,10 +396,37 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
         }
 
         if (i < targets.length - 1 && !unfollowAbortRef.current) {
+          // 1. Periyodik Dinlenme Molası (Anti-Bot Rest Period)
+          if (
+            settings.enableBatchCooldown &&
+            settings.batchSize > 0 &&
+            batchConsecutiveCount >= settings.batchSize
+          ) {
+            batchConsecutiveCount = 0;
+            setIsResting(true);
+            const cooldownEndTime = Date.now() + settings.cooldownSeconds * 1000;
+
+            while (Date.now() < cooldownEndTime) {
+              if (unfollowAbortRef.current) break;
+              const remainingCooldown = Math.max(1, Math.ceil((cooldownEndTime - Date.now()) / 1000));
+              setCountdown(remainingCooldown);
+              setStatusText(t.restingCooldown(remainingCooldown, done));
+              setStatusType('warn');
+              await new Promise((r) => setTimeout(r, 250));
+            }
+
+            setIsResting(false);
+            if (unfollowAbortRef.current) break;
+          }
+
+          // 2. Rastgele İnsansı Aralık (Dynamic Jittered Delay)
           const delayMs = unfollowersService.calculateDelayMs(
-            settings.delaySeconds,
+            settings.minDelaySeconds,
+            settings.maxDelaySeconds,
             settings.jitter
           );
+          const delaySec = Math.round(delayMs / 1000);
+          setCurrentDelayRangeText(`${settings.minDelaySeconds}-${settings.maxDelaySeconds}s`);
           const endTime = Date.now() + delayMs;
 
           while (Date.now() < endTime) {
@@ -351,6 +441,7 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
 
       setProgressPercent(100);
       setCountdown(null);
+      setIsResting(false);
 
       if (unfollowAbortRef.current) {
         setStatusText(t.stoppedMessage(done, failed));
@@ -364,6 +455,7 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
       setStatusType('err');
     } finally {
       setIsUnfollowing(false);
+      setIsResting(false);
       setCountdown(null);
     }
   };
@@ -411,15 +503,12 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
   const filteredAndSortedAccounts = useMemo(() => {
     // 1. Filtreleme
     const filtered = accounts.filter((u) => {
-      // Sekme Filtresi
       if (activeTab === 'selected' && !selectedIds.has(u.id)) return false;
       if (activeTab === 'whitelisted' && !whitelistIds.has(u.id)) return false;
 
-      // Min / Max Takipçi Filtresi
       if (minFollowers !== '' && u.followers < minFollowers) return false;
       if (maxFollowers !== '' && u.followers > maxFollowers) return false;
 
-      // Metin Arama
       if (!searchQuery.trim()) return true;
       const q = searchQuery.toLowerCase().trim();
       return (
@@ -493,6 +582,17 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
                 <Sparkles size={22} />
               </div>
               <h2 className="text-xl font-bold tracking-tight">{t.title}</h2>
+              {/* Aktif Güvenlik Profili Rozeti */}
+              <span className="hidden sm:inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-400/30">
+                <Shield size={11} />
+                {settings.safetyPreset === 'safe'
+                  ? `Anti-Ban (${settings.minDelaySeconds}-${settings.maxDelaySeconds}s)`
+                  : settings.safetyPreset === 'balanced'
+                  ? `Dengeli (${settings.minDelaySeconds}-${settings.maxDelaySeconds}s)`
+                  : settings.safetyPreset === 'fast'
+                  ? `Hızlı (${settings.minDelaySeconds}-${settings.maxDelaySeconds}s)`
+                  : `Özel (${settings.minDelaySeconds}-${settings.maxDelaySeconds}s)`}
+              </span>
             </div>
             <p className="text-slate-300 text-sm mt-1 max-w-2xl">{t.subtitle}</p>
           </div>
@@ -500,10 +600,14 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
           <div className="flex items-center gap-3">
             <button
               onClick={() => setShowSettingsModal(!showSettingsModal)}
-              className="flex items-center gap-2 px-3.5 py-2 text-xs font-semibold bg-white/10 hover:bg-white/20 text-white rounded-xl backdrop-blur-sm border border-white/10 transition-colors"
+              className={`flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-xl backdrop-blur-sm border transition-all ${
+                showSettingsModal
+                  ? 'bg-blue-600 text-white border-blue-400 shadow-md'
+                  : 'bg-white/10 hover:bg-white/20 text-white border-white/10'
+              }`}
             >
               <Sliders size={15} />
-              {lang === 'tr' ? 'Aralık & Güvenlik' : 'Delay & Safety'}
+              {t.safety.title}
             </button>
 
             {isScanning ? (
@@ -531,42 +635,205 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
           </div>
         </div>
 
-        {/* Güvenlik & Ayar Açılır Paneli */}
+        {/* ── Gelişmiş Anti-Ban & Güvenlik Ayarları Modal Paneli ── */}
         {showSettingsModal && (
-          <div className="mt-5 pt-5 border-t border-white/15 grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-            <div className="flex items-center gap-3 bg-white/5 p-3 rounded-xl border border-white/10">
-              <Clock size={18} className="text-blue-400 flex-shrink-0" />
-              <div className="flex-1">
-                <label className="block text-slate-300 font-medium mb-1">{t.intervalLabel}</label>
-                <input
-                  type="number"
-                  min="5"
-                  max="600"
-                  value={settings.delaySeconds}
-                  onChange={(e) =>
-                    handleUpdateSettings({
-                      delaySeconds: Math.max(5, Math.min(600, parseInt(e.target.value, 10) || 30)),
-                    })
-                  }
-                  className="w-24 bg-black/40 border border-white/20 rounded-lg px-2.5 py-1 text-white text-sm font-semibold focus:outline-none focus:border-blue-400"
-                />
+          <div className="mt-5 pt-5 border-t border-white/15 space-y-4 text-xs">
+            {/* Güvenlik Profili Preset Kartları */}
+            <div>
+              <label className="block text-slate-300 font-semibold mb-2">{t.safety.presetLabel}</label>
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
+                {[
+                  {
+                    id: 'safe' as const,
+                    title: t.safety.presetSafe,
+                    desc: '25-50s rastgele + 3 dk mola',
+                    badge: 'Anti-Ban',
+                    color: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
+                  },
+                  {
+                    id: 'balanced' as const,
+                    title: t.safety.presetBalanced,
+                    desc: '15-30s rastgele + 2 dk mola',
+                    badge: 'Standart',
+                    color: 'border-blue-500/40 bg-blue-500/10 text-blue-300',
+                  },
+                  {
+                    id: 'fast' as const,
+                    title: t.safety.presetFast,
+                    desc: '8-15s rastgele (molasız)',
+                    badge: 'Hızlı',
+                    color: 'border-amber-500/40 bg-amber-500/10 text-amber-300',
+                  },
+                  {
+                    id: 'custom' as const,
+                    title: t.safety.presetCustom,
+                    desc: 'Özel süre & mola ayarları',
+                    badge: 'Manuel',
+                    color: 'border-purple-500/40 bg-purple-500/10 text-purple-300',
+                  },
+                ].map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => applySafetyPreset(preset.id)}
+                    className={`p-3 rounded-xl border text-left transition-all ${
+                      settings.safetyPreset === preset.id
+                        ? `${preset.color} ring-2 ring-blue-400 font-semibold`
+                        : 'bg-white/5 border-white/10 hover:bg-white/10 text-slate-300'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold">{preset.title}</span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-white">
+                        {preset.badge}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-1">{preset.desc}</p>
+                  </button>
+                ))}
               </div>
             </div>
 
-            <div className="flex items-center justify-between bg-white/5 p-3 rounded-xl border border-white/10">
-              <div className="flex items-center gap-2.5">
-                <Shuffle size={18} className="text-indigo-400 flex-shrink-0" />
-                <div>
-                  <span className="block text-white font-medium">{t.jitterLabel}</span>
-                  <span className="text-slate-400 text-[11px]">{t.jitterTooltip}</span>
+            {/* Ayrıntılı Süre ve Mola Girişleri */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {/* Min - Max Rastgele Aralık */}
+              <div className="bg-white/5 p-3 rounded-xl border border-white/10">
+                <label className="block text-slate-300 font-medium mb-1.5 flex items-center gap-1.5">
+                  <Clock size={14} className="text-blue-400" />
+                  {t.randomRangeLabel}
+                </label>
+                <div className="flex items-center gap-2">
+                  <div className="flex-1">
+                    <span className="text-[10px] text-slate-400 block mb-0.5">{t.minIntervalLabel}</span>
+                    <input
+                      type="number"
+                      min="3"
+                      max="600"
+                      value={settings.minDelaySeconds}
+                      onChange={(e) => {
+                        handleUpdateSettings({
+                          safetyPreset: 'custom',
+                          minDelaySeconds: Math.max(3, parseInt(e.target.value, 10) || 5),
+                        });
+                      }}
+                      className="w-full bg-black/40 border border-white/20 rounded-lg px-2.5 py-1 text-white text-sm font-semibold focus:outline-none focus:border-blue-400"
+                    />
+                  </div>
+                  <span className="text-slate-400 mt-3">-</span>
+                  <div className="flex-1">
+                    <span className="text-[10px] text-slate-400 block mb-0.5">{t.maxIntervalLabel}</span>
+                    <input
+                      type="number"
+                      min="5"
+                      max="600"
+                      value={settings.maxDelaySeconds}
+                      onChange={(e) => {
+                        handleUpdateSettings({
+                          safetyPreset: 'custom',
+                          maxDelaySeconds: Math.max(5, parseInt(e.target.value, 10) || 10),
+                        });
+                      }}
+                      className="w-full bg-black/40 border border-white/20 rounded-lg px-2.5 py-1 text-white text-sm font-semibold focus:outline-none focus:border-blue-400"
+                    />
+                  </div>
                 </div>
               </div>
-              <input
-                type="checkbox"
-                checked={settings.jitter}
-                onChange={(e) => handleUpdateSettings({ jitter: e.target.checked })}
-                className="w-4 h-4 accent-blue-500 rounded cursor-pointer"
-              />
+
+              {/* Periyodik Dinlenme Molası */}
+              <div className="bg-white/5 p-3 rounded-xl border border-white/10">
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-slate-300 font-medium flex items-center gap-1.5">
+                    <Coffee size={14} className="text-amber-400" />
+                    {t.safety.cooldownTitle}
+                  </label>
+                  <input
+                    type="checkbox"
+                    checked={settings.enableBatchCooldown}
+                    onChange={(e) => {
+                      handleUpdateSettings({
+                        safetyPreset: 'custom',
+                        enableBatchCooldown: e.target.checked,
+                      });
+                    }}
+                    className="w-4 h-4 accent-blue-500 rounded cursor-pointer"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2 opacity-95">
+                  <div>
+                    <span className="text-[10px] text-slate-400 block mb-0.5">Her X Kişide:</span>
+                    <input
+                      type="number"
+                      min="5"
+                      max="100"
+                      disabled={!settings.enableBatchCooldown}
+                      value={settings.batchSize}
+                      onChange={(e) => {
+                        handleUpdateSettings({
+                          safetyPreset: 'custom',
+                          batchSize: Math.max(5, parseInt(e.target.value, 10) || 15),
+                        });
+                      }}
+                      className="w-full bg-black/40 border border-white/20 rounded-lg px-2.5 py-1 text-white text-sm font-semibold focus:outline-none focus:border-blue-400 disabled:opacity-40"
+                    />
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 block mb-0.5">Mola (sn):</span>
+                    <input
+                      type="number"
+                      min="10"
+                      max="600"
+                      disabled={!settings.enableBatchCooldown}
+                      value={settings.cooldownSeconds}
+                      onChange={(e) => {
+                        handleUpdateSettings({
+                          safetyPreset: 'custom',
+                          cooldownSeconds: Math.max(10, parseInt(e.target.value, 10) || 180),
+                        });
+                      }}
+                      className="w-full bg-black/40 border border-white/20 rounded-lg px-2.5 py-1 text-white text-sm font-semibold focus:outline-none focus:border-blue-400 disabled:opacity-40"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Günlük Maksimum Limit & Jitter */}
+              <div className="bg-white/5 p-3 rounded-xl border border-white/10 flex flex-col justify-between">
+                <div>
+                  <label className="block text-slate-300 font-medium mb-1">
+                    {t.safety.dailyLimitLabel}
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="1000"
+                    value={settings.dailyLimit}
+                    onChange={(e) => {
+                      handleUpdateSettings({
+                        dailyLimit: Math.max(0, parseInt(e.target.value, 10) || 0),
+                      });
+                    }}
+                    className="w-full bg-black/40 border border-white/20 rounded-lg px-2.5 py-1 text-white text-sm font-semibold focus:outline-none focus:border-blue-400"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between mt-2 pt-2 border-t border-white/10">
+                  <div className="flex items-center gap-1.5">
+                    <Shuffle size={13} className="text-indigo-400" />
+                    <span className="text-slate-300 text-[11px] font-medium">{t.jitterLabel}</span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={settings.jitter}
+                    onChange={(e) => handleUpdateSettings({ jitter: e.target.checked })}
+                    className="w-3.5 h-3.5 accent-blue-500 rounded cursor-pointer"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="text-[11px] text-amber-300/90 bg-amber-500/10 p-2.5 rounded-xl border border-amber-500/20 flex items-center gap-2">
+              <AlertTriangle size={14} className="flex-shrink-0" />
+              <span>{t.safetyNotice}</span>
             </div>
           </div>
         )}
@@ -610,16 +877,23 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
           </div>
           <div>
             <p className="text-xs font-medium text-gray-500">{t.statDaily}</p>
-            <p className="text-xl font-bold text-gray-900">{settings.dailyCount}</p>
+            <div className="flex items-baseline gap-1">
+              <p className="text-xl font-bold text-gray-900">{settings.dailyCount}</p>
+              {settings.dailyLimit > 0 && (
+                <span className="text-xs text-gray-400 font-medium">/ {settings.dailyLimit}</span>
+              )}
+            </div>
           </div>
         </div>
       </div>
 
-      {/* ── Canlı Durum & Geri Sayım & İlerleme Çubuğu ── */}
-      {(statusText || isScanning || isUnfollowing) && (
+      {/* ── Canlı Durum, Geri Sayım & Dinlenme Molası Çubuğu ── */}
+      {(statusText || isScanning || isUnfollowing || isResting) && (
         <div
           className={`p-4 rounded-xl border flex flex-col gap-2 transition-all ${
-            statusType === 'ok'
+            isResting
+              ? 'bg-amber-50 border-amber-300 text-amber-900 shadow-sm'
+              : statusType === 'ok'
               ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
               : statusType === 'warn'
               ? 'bg-amber-50 border-amber-200 text-amber-800'
@@ -632,7 +906,9 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
             <div className="flex items-center gap-2 text-sm font-medium">
               <span
                 className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${
-                  isScanning || isUnfollowing
+                  isResting
+                    ? 'animate-ping bg-amber-600'
+                    : isScanning || isUnfollowing
                     ? 'animate-ping bg-blue-600'
                     : statusType === 'err'
                     ? 'bg-red-600'
@@ -660,9 +936,17 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
                 </button>
               )}
 
-              {countdown !== null && (
-                <span className="text-xs font-bold px-2.5 py-1 bg-blue-600 text-white rounded-full animate-pulse">
-                  {t.nextAccountIn(countdown)}
+              {countdown !== null && !isResting && (
+                <span className="text-xs font-bold px-3 py-1 bg-blue-600 text-white rounded-full animate-pulse flex items-center gap-1.5 shadow-xs">
+                  <Clock size={12} />
+                  {t.nextAccountIn(countdown, currentDelayRangeText)}
+                </span>
+              )}
+
+              {isResting && countdown !== null && (
+                <span className="text-xs font-bold px-3 py-1 bg-amber-600 text-white rounded-full animate-bounce flex items-center gap-1.5 shadow-xs">
+                  <Coffee size={13} />
+                  {countdown} sn Mola
                 </span>
               )}
             </div>
@@ -671,7 +955,9 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
           {progressPercent !== null && (
             <div className="w-full bg-blue-200/50 rounded-full h-2 overflow-hidden mt-1">
               <div
-                className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                className={`h-2 rounded-full transition-all duration-300 ${
+                  isResting ? 'bg-amber-600' : 'bg-blue-600'
+                }`}
                 style={{ width: `${progressPercent}%` }}
               />
             </div>
@@ -817,7 +1103,7 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
 
         {/* Alt Satır: Sekmeler, Sayfa Başı Seçici ve Toplu Seçim İşlemleri */}
         <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-gray-100 text-xs">
-          {/* Sekme Butonları (Tümü / Seçilenler / Yıldızlılar) */}
+          {/* Sekme Butonları */}
           <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-xl">
             <button
               onClick={() => setActiveTab('all')}
