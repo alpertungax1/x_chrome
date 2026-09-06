@@ -18,6 +18,7 @@ import {
   Coffee,
   Shuffle,
   StopCircle,
+  ArrowUpDown,
 } from 'lucide-react';
 import { translations, Language } from '../i18n';
 import { useAppStore } from '../store/app-store';
@@ -25,6 +26,14 @@ import { unfollowersService } from '../services/unfollowers-service';
 import { UnfollowersSettings, SafetyPreset } from '../types/unfollowers';
 
 const PAGE_SIZE = 50;
+
+export type TableSortOption =
+  | 'newest'
+  | 'oldest'
+  | 'followers_desc'
+  | 'followers_asc'
+  | 'name_asc'
+  | 'name_desc';
 
 interface UserTableProps {
   users: XUser[];
@@ -62,6 +71,7 @@ export const UserTable: React.FC<UserTableProps> = ({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
+  const [sortOption, setSortOption] = useState<TableSortOption>('newest');
   const [maxFollowersInput, setMaxFollowersInput] = useState('');
   const [minFollowersInput, setMinFollowersInput] = useState('');
   const [hideUnknownCounts, setHideUnknownCounts] = useState(false);
@@ -326,12 +336,34 @@ export const UserTable: React.FC<UserTableProps> = ({
       });
     }
 
-    return list;
-  }, [users, debouncedQuery, maxFollowers, minFollowers, hasCountFilter]);
+    const sorted = [...list];
+    switch (sortOption) {
+      case 'oldest':
+        sorted.reverse();
+        break;
+      case 'followers_desc':
+        sorted.sort((a, b) => (b.followersCount ?? -1) - (a.followersCount ?? -1));
+        break;
+      case 'followers_asc':
+        sorted.sort((a, b) => (a.followersCount ?? 999999999) - (b.followersCount ?? 999999999));
+        break;
+      case 'name_asc':
+        sorted.sort((a, b) => a.displayName.localeCompare(b.displayName));
+        break;
+      case 'name_desc':
+        sorted.sort((a, b) => b.displayName.localeCompare(a.displayName));
+        break;
+      case 'newest':
+      default:
+        break;
+    }
+
+    return sorted;
+  }, [users, debouncedQuery, maxFollowers, minFollowers, hasCountFilter, sortOption]);
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [maxFollowers, minFollowers, hideUnknownCounts, debouncedQuery]);
+  }, [maxFollowers, minFollowers, debouncedQuery, sortOption]);
 
   const totalPages = Math.max(1, Math.ceil(filteredUsers.length / PAGE_SIZE));
   const paginatedUsers = useMemo(() => {
@@ -725,15 +757,35 @@ export const UserTable: React.FC<UserTableProps> = ({
           </div>
         )}
 
-        <div className="relative mb-3">
-          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input
-            type="text"
-            placeholder={t.searchPlaceholder}
-            value={searchQuery}
-            onChange={handleSearchChange}
-            className="w-full pl-9 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
-          />
+        {/* Arama ve Sıralama Çubuğu */}
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 mb-3">
+          <div className="relative flex-1">
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              type="text"
+              placeholder={t.searchPlaceholder}
+              value={searchQuery}
+              onChange={handleSearchChange}
+              className="w-full pl-9 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+            />
+          </div>
+
+          <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 flex-shrink-0 shadow-2xs">
+            <ArrowUpDown size={14} className="text-gray-500" />
+            <span className="text-xs font-medium text-gray-500">{t.sort?.label || 'Sıralama:'}</span>
+            <select
+              value={sortOption}
+              onChange={(e) => setSortOption(e.target.value as TableSortOption)}
+              className="bg-transparent text-xs font-semibold text-gray-800 focus:outline-none cursor-pointer"
+            >
+              <option value="newest">{t.sort?.newest || '⚡ Yeniden Eskiye (En Son)'}</option>
+              <option value="oldest">{t.sort?.oldest || '⏳ Eskiden Yeniye (İlk)'}</option>
+              <option value="followers_desc">{t.sort?.followersDesc || '👥 En Çok Takipçi'}</option>
+              <option value="followers_asc">{t.sort?.followersAsc || '👤 En Az Takipçi'}</option>
+              <option value="name_asc">{t.sort?.nameAsc || '🔤 İsim (A → Z)'}</option>
+              <option value="name_desc">{t.sort?.nameDesc || '🔤 İsim (Z → A)'}</option>
+            </select>
+          </div>
         </div>
 
         {/* Hızlı filtre: N kişiden az takipçi */}

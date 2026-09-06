@@ -64,6 +64,15 @@ export const translations = {
       titleUnfollow: 'Takipten Çık',
       titleFollow: 'Takip Et',
       lessThanN: (n: number) => `${n} kişiden az takipçisi olanlar`,
+      sort: {
+        label: 'Sıralama:',
+        newest: '⚡ Yeniden Eskiye (En Son)',
+        oldest: '⏳ Eskiden Yeniye (İlk)',
+        followersDesc: '👥 En Çok Takipçi',
+        followersAsc: '👤 En Az Takipçi',
+        nameAsc: '🔤 İsim (A → Z)',
+        nameDesc: '🔤 İsim (Z → A)',
+      },
     },
     // Scan status
     scan: {
@@ -224,6 +233,15 @@ export const translations = {
       titleUnfollow: 'Unfollow',
       titleFollow: 'Follow',
       lessThanN: (n: number) => `Users with fewer than ${n} followers`,
+      sort: {
+        label: 'Sort by:',
+        newest: '⚡ Newest to Oldest',
+        oldest: '⏳ Oldest to Newest',
+        followersDesc: '👥 Most Followers',
+        followersAsc: '👤 Least Followers',
+        nameAsc: '🔤 Name (A → Z)',
+        nameDesc: '🔤 Name (Z → A)',
+      },
     },
     // Scan status
     scan: {
