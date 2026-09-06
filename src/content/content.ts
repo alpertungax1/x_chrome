@@ -230,7 +230,25 @@ function initContentScript() {
       return true;
     }
 
-    if ((message.type as string) === 'STOP_UNFOLLOWERS_SCAN') {
+    if ((message.type as string) === 'START_FULL_SCAN_DIRECT') {
+      showScanOverlay('Tüm hesaplar taranıyor (API)...');
+      xUnfollowersDirectScraper
+        .scanFull((status) => {
+          showScanOverlay(status);
+          safeSendMessage({ type: 'SCAN_PROGRESS' as any, payload: { debug: status } });
+        })
+        .then((result) => {
+          hideScanOverlay();
+          sendResponse({ success: true, ...result });
+        })
+        .catch((err) => {
+          hideScanOverlay();
+          sendResponse({ success: false, error: err?.message || String(err) });
+        });
+      return true;
+    }
+
+    if ((message.type as string) === 'STOP_UNFOLLOWERS_SCAN' || (message.type as string) === 'STOP_FULL_SCAN_DIRECT') {
       xUnfollowersDirectScraper.stop();
       hideScanOverlay();
       sendResponse({ ok: true });

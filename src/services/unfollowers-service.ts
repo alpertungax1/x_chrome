@@ -271,6 +271,62 @@ export class UnfollowersService {
     }
   }
 
+  /**
+   * Tüm Takip Edilenler ve Takipçileri Gerçek Takipçi Sayılarıyla Çeker (Pencere açmaz, %100 Arka Planda)
+   */
+  public async scanFullRelationshipsDirect(
+    onStatus?: (text: string) => void
+  ): Promise<{ following: any[]; followers: any[] }> {
+    onStatus?.('X oturumu doğrulanıyor...');
+    const tabId = await this.ensureXSession(onStatus);
+
+    const progressListener = (msg: any) => {
+      if (msg?.type === 'SCAN_PROGRESS' && msg.payload?.debug) {
+        onStatus?.(msg.payload.debug);
+      }
+    };
+    chrome.runtime.onMessage.addListener(progressListener);
+
+    try {
+      onStatus?.('Hesaplar ve takipçi sayıları taranıyor...');
+      const response: any = await new Promise((resolve, reject) => {
+        chrome.tabs.sendMessage(tabId, { type: 'START_FULL_SCAN_DIRECT' }, (res) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+          } else {
+            resolve(res);
+          }
+        });
+      });
+
+      if (!response?.success) {
+        throw new Error(response?.error || 'Tarama başarısız oldu.');
+      }
+
+      return {
+        following: response.following || [],
+        followers: response.followers || [],
+      };
+    } finally {
+      chrome.runtime.onMessage.removeListener(progressListener);
+    }
+  }
+
+  public async stopFullScanDirect(): Promise<void> {
+    try {
+      const tabs = await chrome.tabs.query({ url: ['*://x.com/*', '*://twitter.com/*'] });
+      for (const tab of tabs) {
+        if (tab.id) {
+          chrome.tabs.sendMessage(tab.id, { type: 'STOP_FULL_SCAN_DIRECT' }, () => {
+            void chrome.runtime.lastError;
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('stopFullScanDirect failed:', e);
+    }
+  }
+
   public async unfollowUser(user: { id: string; username: string }): Promise<boolean> {
     const tabId = await this.ensureXSession();
     const response: any = await new Promise((resolve, reject) => {

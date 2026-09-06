@@ -251,6 +251,86 @@ export class XUnfollowersDirectScraper {
     return all;
   }
 
+  public async fetchFollowersGraphQL(queryId: string, features: string, onProgress?: (count: number) => void): Promise<UnfollowerUser[]> {
+    const uid = selfUserId();
+    if (!uid) throw new Error('Kullanıcı kimliği (twid) okunamadı. Lütfen x.com’a giriş yapın.');
+
+    const all: UnfollowerUser[] = [];
+    const seen = new Set<string>();
+    let cursor: string | null = null;
+    let pages = 0;
+
+    while (!this.stopFlag) {
+      pages += 1;
+      const variables: any = {
+        userId: uid,
+        count: 100,
+        includePromotedContent: false,
+      };
+      if (cursor) variables.cursor = cursor;
+
+      const path = `/i/api/graphql/${queryId}/Followers?variables=${encodeURIComponent(
+        JSON.stringify(variables)
+      )}&features=${encodeURIComponent(features || FALLBACK_FEATURES)}`;
+
+      const json = await this.xRequest(path);
+      const parsed = this.walkGraphQL(json);
+
+      for (const u of parsed.users) {
+        if (!seen.has(u.id)) {
+          seen.add(u.id);
+          all.push({ ...u, followedBy: true });
+        }
+      }
+
+      onProgress?.(all.length);
+      if (!parsed.cursor || parsed.users.length === 0) break;
+      cursor = parsed.cursor;
+      await sleep(700 + Math.floor(Math.random() * 500));
+      if (pages > 250) break;
+    }
+
+    return all;
+  }
+
+  public async fetchFollowersRest(onProgress?: (count: number) => void): Promise<UnfollowerUser[]> {
+    const all: UnfollowerUser[] = [];
+    const seen = new Set<string>();
+    let cursor = '-1';
+    let pages = 0;
+
+    while (!this.stopFlag && cursor && cursor !== '0') {
+      pages += 1;
+      const json = await this.xRequest(
+        `/i/api/1.1/followers/list.json?count=200&cursor=${encodeURIComponent(cursor)}&skip_status=true&include_user_entities=false`
+      );
+      const users = Array.isArray(json?.users) ? json.users : [];
+      for (const raw of users) {
+        const u: UnfollowerUser = {
+          id: String(raw.id_str || raw.id),
+          username: raw.screen_name,
+          name: raw.name || raw.screen_name,
+          avatar: raw.profile_image_url_https || '',
+          followers: raw.followers_count || 0,
+          followingCount: raw.friends_count || 0,
+          followedBy: true,
+          verified: !!raw.verified,
+        };
+        if (u.id && u.username && !seen.has(u.id)) {
+          seen.add(u.id);
+          all.push(u);
+        }
+      }
+      onProgress?.(all.length);
+      cursor = json?.next_cursor_str || '0';
+      if (!users.length) break;
+      await sleep(700 + Math.floor(Math.random() * 500));
+      if (pages > 250) break;
+    }
+
+    return all;
+  }
+
   public async lookupFollowedBy(accounts: UnfollowerUser[], onProgress?: (done: number, total: number) => void): Promise<void> {
     const unknown = accounts.filter((u) => u.followedBy == null);
     for (let i = 0; i < unknown.length; i += 100) {
@@ -311,22 +391,129 @@ export class XUnfollowersDirectScraper {
     }
 
     if (!following.length) {
+      if (this.stopFlag) return [];
       throw new Error(
         'Takip listeniz okunamadı: ' + (lastErr?.message || 'Lütfen açık olan x.com sekmesini yenileyip tekrar deneyin.')
       );
     }
 
-    if (this.stopFlag) return [];
+    if (this.stopFlag) {
+      return following.filter((u) => u.followedBy === false || u.followedBy == null);
+    }
 
     onStatus?.(`Geri takip durumu kontrol ediliyor... (${following.length} hesap)`);
     await this.lookupFollowedBy(following, (done, total) => {
       onStatus?.(`Geri takip kontrol ediliyor: ${done} / ${total}`);
     });
 
-    if (this.stopFlag) return [];
-
-    const nonFollowers = following.filter((u) => u.followedBy === false);
+    const nonFollowers = following.filter((u) => u.followedBy === false || (this.stopFlag && u.followedBy == null));
     return nonFollowers;
+  }
+
+  /**
+   * Tüm Takip Edilenler ve Takipçileri Gerçek Takipçi Sayılarıyla Çeker (Pencere açmaz, %100 Arka Planda)
+   */
+  public async scanFull(onStatus?: (text: string) => void): Promise<{
+    following: any[];
+    followers: any[];
+  }> {
+    this.stopFlag = false;
+    onStatus?.('Takip edilenler taranıyor (API)...');
+
+    let followingRaw: UnfollowerUser[] = [];
+    for (const qid of FALLBACK_QUERY_IDS) {
+      try {
+        followingRaw = await this.fetchFollowingGraphQL(qid, FALLBACK_FEATURES, (count) => {
+          onStatus?.(`Takip edilenler taranıyor: ${count} hesap`);
+        });
+        break;
+      } catch (_) {}
+    }
+
+    if (!followingRaw.length && !this.stopFlag) {
+      try {
+        followingRaw = await this.fetchFollowingRest((count) => {
+          onStatus?.(`Takip edilenler taranıyor (REST): ${count} hesap`);
+        });
+      } catch (_) {}
+    }
+
+    const mapToUser = (u: UnfollowerUser, isFollowing: boolean, isFollower: boolean | null) => ({
+      id: u.username.toLowerCase(),
+      username: u.username,
+      displayName: u.name,
+      avatarUrl: u.avatar,
+      followersCount: typeof u.followers === 'number' ? u.followers : 0,
+      followingCount: typeof u.followingCount === 'number' ? u.followingCount : 0,
+      isFollowing,
+      isFollower: isFollower ?? false,
+      firstSeenAt: Date.now(),
+      lastSeenAt: Date.now(),
+    });
+
+    // Eğer durdurulduysa veya takip edilen bulunamadıysa olanı dön
+    if (this.stopFlag || followingRaw.length === 0) {
+      return {
+        following: followingRaw.map((u) => mapToUser(u, true, u.followedBy)),
+        followers: followingRaw.filter((u) => u.followedBy === true).map((u) => mapToUser(u, true, true)),
+      };
+    }
+
+    onStatus?.(`Geri takip durumları kontrol ediliyor... (${followingRaw.length} hesap)`);
+    await this.lookupFollowedBy(followingRaw, (done, total) => {
+      onStatus?.(`Geri takip kontrolü: ${done} / ${total}`);
+    });
+
+    if (this.stopFlag) {
+      return {
+        following: followingRaw.map((u) => mapToUser(u, true, u.followedBy)),
+        followers: followingRaw.filter((u) => u.followedBy === true).map((u) => mapToUser(u, true, true)),
+      };
+    }
+
+    // Takipçileri de çek (sadece takip eden ama geri takip edilmeyenleri tamamlamak için)
+    onStatus?.('Takipçiler taranıyor (API)...');
+    let followersRaw: UnfollowerUser[] = [];
+    for (const qid of FALLBACK_QUERY_IDS) {
+      try {
+        followersRaw = await this.fetchFollowersGraphQL(qid, FALLBACK_FEATURES, (count) => {
+          onStatus?.(`Takipçiler taranıyor: ${count} hesap`);
+        });
+        break;
+      } catch (_) {}
+    }
+
+    if (!followersRaw.length && !this.stopFlag) {
+      try {
+        followersRaw = await this.fetchFollowersRest((count) => {
+          onStatus?.(`Takipçiler taranıyor (REST): ${count} hesap`);
+        });
+      } catch (_) {}
+    }
+
+    const followingMap = new Map<string, UnfollowerUser>();
+    for (const u of followingRaw) {
+      followingMap.set(u.username.toLowerCase(), u);
+    }
+
+    const finalFollowing = followingRaw.map((u) => mapToUser(u, true, u.followedBy));
+    
+    // Followers: hem following içinde followedBy=true olanlar hem de followersRaw'dan gelenler
+    const followersMap = new Map<string, any>();
+    for (const u of followingRaw) {
+      if (u.followedBy === true) {
+        followersMap.set(u.username.toLowerCase(), mapToUser(u, true, true));
+      }
+    }
+    for (const u of followersRaw) {
+      const uname = u.username.toLowerCase();
+      if (!followersMap.has(uname)) {
+        const isAlsoFollowing = followingMap.has(uname);
+        followersMap.set(uname, mapToUser(u, isAlsoFollowing, true));
+      }
+    }
+
+    return { following: finalFollowing, followers: Array.from(followersMap.values()) };
   }
 
   public async lookupUsers(

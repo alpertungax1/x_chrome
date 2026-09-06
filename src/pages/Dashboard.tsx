@@ -297,10 +297,14 @@ const Dashboard: React.FC = () => {
     scanAbortRef.current = true;
     setScanStatus(t.scan.stopping);
 
-    const tabId = scanningTabIdRef.current;
-    const scanId = activeScanIdRef.current;
+    try {
+      const { unfollowersService } = await import('../services/unfollowers-service');
+      await unfollowersService.stopFullScanDirect();
+    } catch {
+      // ignore
+    }
 
-    // Content script'e dur komutu — kısmi kullanıcıları cancelled sonucuyla yazar
+    const tabId = scanningTabIdRef.current;
     if (tabId != null) {
       try {
         await sendTabMessage(tabId, { type: 'SCAN_STOP' });
@@ -308,31 +312,10 @@ const Dashboard: React.FC = () => {
         // sekme kapanmış olabilir
       }
     }
-
-    // Content 2 sn içinde cevap vermezse waitForScanResult'ı serbest bırak
-    if (stopTimeoutRef.current) window.clearTimeout(stopTimeoutRef.current);
-    stopTimeoutRef.current = window.setTimeout(() => {
-      stopTimeoutRef.current = null;
-      if (!scanAbortRef.current) return;
-      void chrome.storage.local.get(['scanResult']).then((data) => {
-        const r = data.scanResult;
-        if (r && (r.scanId === scanId || r.status === 'cancelled')) return;
-        void chrome.storage.local.set({
-          scanStatus: 'cancelled',
-          scanResult: {
-            status: 'cancelled',
-            scanId: scanId || `abort_${Date.now()}`,
-            users: [],
-            completedAt: Date.now(),
-            abortedByUser: true,
-          },
-        });
-      });
-    }, 2000);
-  }, []);
+  }, [t.scan.stopping]);
 
   // ═══════════════════════════════════════════════════════════
-  // SCAN — sadece Scan Now ile; popup + following + followers
+  // SCAN — Doğrudan X API Motoru (Pencere Açmaz, Minimize Edilince Donmaz)
   // ═══════════════════════════════════════════════════════════
   const handleScanNow = async () => {
     if (scanSessionActiveRef.current) return;
@@ -342,178 +325,54 @@ const Dashboard: React.FC = () => {
     setIsScanning(true);
     setScanStatus(t.scan.starting);
 
-    await chrome.storage.local.remove([
-      'scanResult',
-      'scanResultMeta',
-      'scanProgress',
-      'scanStatus',
-      'activeScanId',
-    ]);
-
     let followingUsers: Partial<XUser>[] = [];
     let followersUsers: Partial<XUser>[] = [];
     let listMerged = false;
-    let followingComplete = false;
-    let followersComplete = false;
     let lastMerge: { total: number; added: number; updated: number } | null = null;
 
     try {
-      // Eski DB silinmez — tarama sonunda merge edilir
-      setScanStatus('X kullanıcı adı alınıyor...');
-      const username = await resolveXUsername();
-      throwIfAborted();
-      if (!username) {
-        throw new Error(
-          "X kullanıcı adın bulunamadı.\n\nLütfen x.com'da giriş yapılı olduğundan emin ol ve tekrar dene."
-        );
-      }
+      const { unfollowersService } = await import('../services/unfollowers-service');
 
-      // Dashboard pencere id'sini taze al
-      try {
-        const cur = await chrome.windows.getCurrent();
-        if (cur.id != null) dashboardWindowIdRef.current = cur.id;
-      } catch {
-        // ignore
-      }
-
-      setScanStatus(`Popup açılıyor (@${username})...`);
-      const followingUrl = `https://x.com/${username}/following`;
-      // focused:true — X sanal listesi arka planda yüklenmez; tarama ilerlemesi için gerekli.
-      // Dashboard progress'i SW executeScript ile donmuş sekmeye de yazılır (#xrm-scan-live).
-      const { windowId, tabId } = await openScanPopup(followingUrl, true);
-      scanningWindowIdRef.current = windowId;
-      scanningTabIdRef.current = tabId;
-      throwIfAborted();
-
-      setScanStatus('Following sayfası yükleniyor...');
-      await waitForTabComplete(tabId, 25000);
-      throwIfAborted();
-      await wait(2500);
-      throwIfAborted();
-      await ensureContentScript(tabId);
-      throwIfAborted();
-
-      // --- Following ---
-      setScanStatus('Takip edilenler taranıyor...');
-      lastProgressTextRef.current = '';
-      const followingScanId = `following_${Date.now()}`;
-      activeScanIdRef.current = followingScanId;
-      await chrome.storage.local.remove([
-        'scanResult',
-        'scanResultMeta',
-        'scanProgress',
-        'scanStatus',
-      ]);
-      await startScanOnTab(tabId, followingScanId);
-      // Tarama penceresi odakta kalsın (scroll/DOM için); dashboard bar'ı SW günceller
-      try {
-        await chrome.windows.update(windowId, { focused: true });
-      } catch {
-        // ignore
-      }
-      // 7500+ hesaplar uzun sürer — 3 saat (SW arka planda sürer)
-      const followingResult = await waitForScanResult(
-        followingScanId,
-        3 * 60 * 60 * 1000,
-        () => scanAbortRef.current
-      );
-      if (followingResult.status === 'error') {
-        throw new Error(followingResult.error || 'Following taraması başarısız');
-      }
-      followingUsers = followingResult.users || [];
-      followingComplete = followingResult.status === 'completed';
-      if (followingResult.status === 'cancelled' || scanAbortRef.current) {
-        // Kısmi: bulunanları ekle/güncelle, eksik bayrakları düşürme
-        if (followingUsers.length > 0) {
-          lastMerge = await useAppStore.getState().mergeWithScan(followingUsers, [], {
-            followingComplete: false,
-            followersComplete: false,
-          });
-          listMerged = true;
+      setScanStatus('X oturumu kontrol ediliyor...');
+      const result = await unfollowersService.scanFullRelationshipsDirect((status) => {
+        setScanStatus(status);
+        lastProgressTextRef.current = status;
+        document.title = `${status} · X Manager`;
+        const bar = document.getElementById('xrm-scan-live');
+        if (bar) {
+          bar.style.display = 'block';
+          bar.textContent = status;
+          document.body.classList.add('xrm-scanning');
         }
-        throw new ScanAbortedError();
-      }
+      });
 
-      // --- Followers (following bitti → sayfa değiştir) ---
-      setScanStatus(
-        `Following tamam (${followingUsers.length}). Takipçiler sayfasına geçiliyor…`
-      );
-      lastProgressTextRef.current = '';
-      const followersUrl = `https://x.com/${username}/followers`;
-      throwIfAborted();
-      await navigateTabAndWait(tabId, followersUrl);
-      throwIfAborted();
-      await wait(3000);
-      throwIfAborted();
-      await ensureContentScript(tabId);
-      throwIfAborted();
+      followingUsers = result.following || [];
+      followersUsers = result.followers || [];
 
-      setScanStatus('Takipçiler taranıyor...');
-      const followersScanId = `followers_${Date.now()}`;
-      activeScanIdRef.current = followersScanId;
-      await chrome.storage.local.remove([
-        'scanResult',
-        'scanResultMeta',
-        'scanProgress',
-        'scanStatus',
-      ]);
-      await startScanOnTab(tabId, followersScanId);
-      try {
-        if (scanningWindowIdRef.current != null) {
-          await chrome.windows.update(scanningWindowIdRef.current, { focused: true });
-        }
-      } catch {
-        // ignore
-      }
-      const followersResult = await waitForScanResult(
-        followersScanId,
-        3 * 60 * 60 * 1000,
-        () => scanAbortRef.current
-      );
-      if (followersResult.status === 'error') {
-        throw new Error(followersResult.error || 'Followers taraması başarısız');
-      }
-      followersUsers = followersResult.users || [];
-      followersComplete = followersResult.status === 'completed';
-      if (followersResult.status === 'cancelled' || scanAbortRef.current) {
-        // Following tamam, followers kısmi
-        lastMerge = await useAppStore.getState().mergeWithScan(
-          followingUsers,
-          followersUsers,
-          {
-            followingComplete: true,
-            followersComplete: false,
-          }
-        );
-        listMerged = true;
-        throw new ScanAbortedError();
-      }
-
-      // Tam tarama: silmeden birleştir + kaybolan bayrakları güncelle
       setScanStatus('Veritabanı güncelleniyor...');
+      const isComplete = !scanAbortRef.current;
       lastMerge = await useAppStore.getState().mergeWithScan(
         followingUsers,
         followersUsers,
         {
-          followingComplete: true,
-          followersComplete: true,
+          followingComplete: isComplete,
+          followersComplete: isComplete,
         }
       );
       listMerged = true;
 
-      // Takipçi sayılarını otomatik tamamla (sayısı eksik olanlar için X API sorgusu)
+      // Eksik takipçi sayılarını otomatik tamamla (sayısı eksik olanlar için X API sorgusu)
       try {
-        setScanStatus('Takipçi sayıları güncelleniyor...');
+        setScanStatus('Takipçi sayıları kontrol ediliyor...');
         const allCurrentUsers = useAppStore.getState().users;
         const missingCounts = allCurrentUsers.filter(
           (u) => typeof u.followersCount !== 'number' || !Number.isFinite(u.followersCount)
         );
         if (missingCounts.length > 0) {
-          const { unfollowersService } = await import('../services/unfollowers-service');
           const list = missingCounts.map((u) => u.username || u.id);
-          const results = await unfollowersService.fetchFollowerCountsDirect(list);
-          if (results && results.length > 0) {
-            const map = new Map(results.map((r) => [r.username.toLowerCase(), r.followersCount]));
+          const lookupResults = await unfollowersService.fetchFollowerCountsDirect(list);
+          if (lookupResults && lookupResults.length > 0) {
+            const map = new Map(lookupResults.map((r) => [r.username.toLowerCase(), r.followersCount]));
             const updates: { id: string; followersCount: number }[] = [];
             for (const u of missingCounts) {
               const count = map.get(u.username.toLowerCase());
@@ -530,17 +389,12 @@ const Dashboard: React.FC = () => {
         console.warn('Auto fetch follower counts after scan failed:', countErr);
       }
 
-      await chrome.storage.local.remove([
-        'scanProgress',
-        'scanStatus',
-        'scanResult',
-        'scanResultMeta',
-        'activeScanId',
-      ]);
-      closeScanningWindow();
-      scanningTabIdRef.current = null;
+      if (scanAbortRef.current) {
+        throw new ScanAbortedError();
+      }
+
       alert(
-        `Tarama tamamlandı! Tüm kullanıcılar ve takipçi sayıları güncellendi.\n` +
+        `Tarama tamamlandı! Tüm kullanıcılar ve gerçek takipçi sayıları güncellendi.\n` +
           `Following: ${followingUsers.length}\n` +
           `Followers: ${followersUsers.length}\n` +
           (lastMerge ? `Yeni: ${lastMerge.added} · Güncellenen: ${lastMerge.updated}\n` +
@@ -548,15 +402,6 @@ const Dashboard: React.FC = () => {
       );
     } catch (error: any) {
       console.error('Scan failed:', error);
-      closeScanningWindow();
-      scanningTabIdRef.current = null;
-      await chrome.storage.local.remove([
-        'scanProgress',
-        'scanStatus',
-        'scanResult',
-        'scanResultMeta',
-        'activeScanId',
-      ]);
 
       // Abort dışı hata ve henüz yazılmadıysa kısmi sonuçları merge et
       if (
@@ -569,8 +414,8 @@ const Dashboard: React.FC = () => {
             followingUsers,
             followersUsers,
             {
-              followingComplete,
-              followersComplete,
+              followingComplete: false,
+              followersComplete: false,
             }
           );
           listMerged = true;
@@ -597,7 +442,7 @@ const Dashboard: React.FC = () => {
         alert(
           'Tarama başlatılamadı / tamamlanamadı.\n\n' +
             (error?.message || String(error)) +
-            "\n\nİpucu: x.com'da giriş yapılı olsun; eklentiyi chrome://extensions üzerinden Reload et."
+            "\n\nİpucu: Açık olan x.com sekmesinde giriş yapılı olduğundan emin olun."
         );
       }
     } finally {
