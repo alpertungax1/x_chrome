@@ -281,6 +281,27 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
       setAccounts(nonFollowers);
       await chrome.storage.local.set({ xrm_cached_unfollowers: nonFollowers });
 
+      // Ana IndexedDB kullanıcı tablosundaki takipçi sayılarını da senkronize et
+      try {
+        const appStore = useAppStore.getState();
+        const currentUsers = appStore.users;
+        if (currentUsers && currentUsers.length > 0) {
+          const map = new Map(nonFollowers.map((u) => [u.username.toLowerCase(), u.followers]));
+          const updates: { id: string; followersCount: number }[] = [];
+          for (const u of currentUsers) {
+            const count = map.get(u.username.toLowerCase());
+            if (typeof count === 'number' && u.followersCount !== count) {
+              updates.push({ id: u.id, followersCount: count });
+            }
+          }
+          if (updates.length > 0) {
+            await appStore.updateUsersBatch(updates);
+          }
+        }
+      } catch (syncErr) {
+        console.warn('Sync with main store failed:', syncErr);
+      }
+
       if (nonFollowers.length === 0) {
         setStatusText(t.noUnfollowersFound);
         setStatusType('ok');

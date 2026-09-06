@@ -179,6 +179,84 @@ export const UserTable: React.FC<UserTableProps> = ({
     }
   };
 
+  // Önbellekteki (xrm_cached_unfollowers) veriler ile takipçi sayılarını otomatik eşitle
+  useEffect(() => {
+    void (async () => {
+      try {
+        const cached = await chrome.storage.local.get('xrm_cached_unfollowers');
+        if (Array.isArray(cached.xrm_cached_unfollowers) && cached.xrm_cached_unfollowers.length > 0) {
+          const map = new Map<string, number>();
+          for (const u of cached.xrm_cached_unfollowers) {
+            if (u.username && typeof u.followers === 'number') {
+              map.set(u.username.toLowerCase(), u.followers);
+            }
+          }
+
+          const updates: { id: string; followersCount: number }[] = [];
+          for (const u of users) {
+            if (typeof u.followersCount !== 'number' || !Number.isFinite(u.followersCount)) {
+              const count = map.get(u.username.toLowerCase());
+              if (typeof count === 'number') {
+                updates.push({ id: u.id, followersCount: count });
+              }
+            }
+          }
+
+          if (updates.length > 0) {
+            await updateUsersBatch(updates);
+          }
+        }
+      } catch (err) {
+        console.warn('Cache sync error:', err);
+      }
+    })();
+  }, [users, updateUsersBatch]);
+
+  const handleSyncFromCache = async () => {
+    try {
+      const cached = await chrome.storage.local.get('xrm_cached_unfollowers');
+      if (Array.isArray(cached.xrm_cached_unfollowers) && cached.xrm_cached_unfollowers.length > 0) {
+        const map = new Map<string, number>();
+        for (const u of cached.xrm_cached_unfollowers) {
+          if (u.username && typeof u.followers === 'number') {
+            map.set(u.username.toLowerCase(), u.followers);
+          }
+        }
+
+        const updates: { id: string; followersCount: number }[] = [];
+        for (const u of users) {
+          const count = map.get(u.username.toLowerCase());
+          if (typeof count === 'number' && u.followersCount !== count) {
+            updates.push({ id: u.id, followersCount: count });
+          }
+        }
+
+        if (updates.length > 0) {
+          await updateUsersBatch(updates);
+          alert(
+            lang === 'tr'
+              ? `${updates.length} kullanıcının takipçi sayısı önbellekten güncellendi!`
+              : `${updates.length} users synchronized from cache!`
+          );
+        } else {
+          alert(
+            lang === 'tr'
+              ? 'Tüm kullanıcıların sayıları zaten güncel.'
+              : 'All users are already synchronized.'
+          );
+        }
+      } else {
+        alert(
+          lang === 'tr'
+            ? 'Önbellekte veri bulunamadı. "X Unfollowers" menüsünden tarama yaparak tüm hesapların gerçek takipçi sayılarını saniyeler içinde alabilirsiniz.'
+            : 'No cached data found. Please run a scan from X Unfollowers.'
+        );
+      }
+    } catch (e: any) {
+      console.warn('Sync cache error:', e);
+    }
+  };
+
   // Debounced arama
   const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
@@ -214,14 +292,14 @@ export const UserTable: React.FC<UserTableProps> = ({
   const countStats = useMemo(() => {
     let known = 0;
     for (const u of users) {
-      if (typeof u.followersCount === 'number') known++;
+      if (typeof u.followersCount === 'number' && Number.isFinite(u.followersCount)) known++;
     }
     return { known, total: users.length };
   }, [users]);
 
   const hasCountFilter = maxFollowers != null || minFollowers != null;
   const unknownCountInFilter = hasCountFilter
-    ? users.filter((u) => typeof u.followersCount !== 'number').length
+    ? users.filter((u) => typeof u.followersCount !== 'number' || !Number.isFinite(u.followersCount)).length
     : 0;
 
   const filteredUsers = useMemo(() => {
@@ -238,8 +316,9 @@ export const UserTable: React.FC<UserTableProps> = ({
     if (hasCountFilter) {
       list = list.filter((u) => {
         const c = u.followersCount;
-        if (typeof c !== 'number') {
-          return !hideUnknownCounts;
+        // Takipçi filtresi seçildiğinde (ör. <50), sayısı bilinmeyen hesaplar KESİNLİKLE dahil edilmez!
+        if (typeof c !== 'number' || !Number.isFinite(c)) {
+          return false;
         }
         if (maxFollowers != null && c >= maxFollowers) return false;
         if (minFollowers != null && c < minFollowers) return false;
@@ -248,7 +327,7 @@ export const UserTable: React.FC<UserTableProps> = ({
     }
 
     return list;
-  }, [users, debouncedQuery, maxFollowers, minFollowers, hideUnknownCounts, hasCountFilter]);
+  }, [users, debouncedQuery, maxFollowers, minFollowers, hasCountFilter]);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -768,79 +847,53 @@ export const UserTable: React.FC<UserTableProps> = ({
         </p>
       </div>
 
-      {/* Count filtresi aktif ve bilinmeyenler gizli uyarısı */}
-      {hasCountFilter && unknownCountInFilter > 0 && hideUnknownCounts && (
-        <div className="mx-6 mt-3 mb-1 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2.5">
-          <div className="flex items-start justify-between gap-2">
-            <div className="flex items-start gap-2">
-              <AlertTriangle size={14} className="text-amber-500 flex-shrink-0 mt-0.5" />
+      {/* Takipçi filtresi aktifken sayısı bilinmeyenler uyarısı */}
+      {hasCountFilter && unknownCountInFilter > 0 && (
+        <div className="mx-6 mt-3 mb-1 bg-amber-50/80 border border-amber-200 rounded-xl px-4 py-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-start gap-2.5">
+              <AlertTriangle size={16} className="text-amber-600 flex-shrink-0 mt-0.5" />
               <div>
-                <p className="text-xs text-amber-700 leading-relaxed">
+                <p className="text-xs font-semibold text-amber-900">
                   {lang === 'tr'
-                    ? `${unknownCountInFilter} kullanıcı gizlendi (takipçi sayısı bilinmiyor). X'in son API sınırlandırmaları nedeniyle toplu taramalarda takipçi sayıları artık çekilememektedir.`
-                    : `${unknownCountInFilter} users hidden (no follower count). Due to X's recent API limits, bulk follower counts can no longer be fetched.`}
+                    ? `Filtre: Sadece takipçi sayısı kesin bilinen ve ${
+                        maxFollowers != null ? `< ${maxFollowers}` : ''
+                      }${minFollowers != null ? ` > ${minFollowers}` : ''} olan ${
+                        filteredUsers.length
+                      } kişi listelendi.`
+                    : `Filter: Showing ${filteredUsers.length} users with confirmed counts.`}
+                </p>
+                <p className="text-[11px] text-amber-700 mt-0.5">
+                  {lang === 'tr'
+                    ? `Takipçi sayısı henüz taranmamış ${unknownCountInFilter} hesap yanlış işlem yapılmaması için filtreye dahil edilmedi.`
+                    : `${unknownCountInFilter} users with unknown follower counts were excluded to prevent mistakes.`}
                 </p>
                 {sorsaError && <p className="text-xs text-red-600 mt-1 font-medium">{sorsaError}</p>}
               </div>
             </div>
-            <div className="flex flex-col items-end gap-2">
+            <div className="flex items-center gap-2 self-end sm:self-center flex-shrink-0">
               <button
                 type="button"
-                onClick={() => setHideUnknownCounts(false)}
-                className="flex-shrink-0 text-xs font-medium text-amber-700 underline hover:text-amber-900 whitespace-nowrap"
+                onClick={handleSyncFromCache}
+                className="text-xs font-semibold bg-white text-gray-800 px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 shadow-xs transition-colors whitespace-nowrap"
+                title="X Unfollowers taramasındaki verilerle eşitle"
               >
-                {lang === 'tr' ? 'Hepsini göster' : 'Show all'}
+                {lang === 'tr' ? '🔄 Önbellekten Eşitle' : '🔄 Sync from Cache'}
               </button>
               <button
                 type="button"
                 onClick={handleFetchWithSorsa}
                 disabled={sorsaLoading}
-                className="flex-shrink-0 text-xs font-medium bg-amber-100 text-amber-800 px-3 py-1.5 rounded border border-amber-300 hover:bg-amber-200 whitespace-nowrap flex items-center gap-1 disabled:opacity-50"
+                className="text-xs font-semibold bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded-lg shadow-xs transition-colors whitespace-nowrap flex items-center gap-1.5 disabled:opacity-50"
               >
                 {sorsaLoading && <Loader2 size={12} className="animate-spin" />}
                 {sorsaLoading && sorsaProgress
                   ? `${lang === 'tr' ? 'Çekiliyor' : 'Fetching'} (${sorsaProgress.fetched}/${sorsaProgress.total})`
                   : lang === 'tr'
-                  ? 'Sorsa API ile Sayıları Çek'
-                  : 'Fetch with Sorsa API'}
+                  ? 'Sorsa API ile Çek'
+                  : 'Fetch with Sorsa'}
               </button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* Count filtresi aktif ama bilinmeyenler gösteriliyorsa bilgi */}
-      {hasCountFilter && unknownCountInFilter > 0 && !hideUnknownCounts && (
-        <div className="mx-6 mt-3 mb-1 flex items-center justify-between gap-2 bg-blue-50 border border-blue-200 rounded-lg px-4 py-2.5">
-          <div>
-            <p className="text-xs text-blue-700">
-              {lang === 'tr'
-                ? `${unknownCountInFilter} kullanıcının sayısı bilinmiyor — filtre dışı gösteriliyor.`
-                : `${unknownCountInFilter} users have unknown counts — shown outside filter.`}
-            </p>
-            {sorsaError && <p className="text-xs text-red-600 mt-1 font-medium">{sorsaError}</p>}
-          </div>
-          <div className="flex flex-col items-end gap-2">
-            <button
-              type="button"
-              onClick={() => setHideUnknownCounts(true)}
-              className="flex-shrink-0 text-xs font-medium text-blue-700 underline hover:text-blue-900 whitespace-nowrap"
-            >
-              {lang === 'tr' ? 'Sadece sayıları bilinenleri filtrele' : 'Only filter known counts'}
-            </button>
-            <button
-              type="button"
-              onClick={handleFetchWithSorsa}
-              disabled={sorsaLoading}
-              className="flex-shrink-0 text-xs font-medium bg-blue-100 text-blue-800 px-3 py-1.5 rounded border border-blue-300 hover:bg-blue-200 whitespace-nowrap flex items-center gap-1 disabled:opacity-50"
-            >
-              {sorsaLoading && <Loader2 size={12} className="animate-spin" />}
-              {sorsaLoading && sorsaProgress
-                ? `${lang === 'tr' ? 'Çekiliyor' : 'Fetching'} (${sorsaProgress.fetched}/${sorsaProgress.total})`
-                : lang === 'tr'
-                ? 'Sorsa API ile Sayıları Çek'
-                : 'Fetch with Sorsa API'}
-            </button>
           </div>
         </div>
       )}
