@@ -501,6 +501,35 @@ const Dashboard: React.FC = () => {
       );
       listMerged = true;
 
+      // Takipçi sayılarını otomatik tamamla (sayısı eksik olanlar için X API sorgusu)
+      try {
+        setScanStatus('Takipçi sayıları güncelleniyor...');
+        const allCurrentUsers = useAppStore.getState().users;
+        const missingCounts = allCurrentUsers.filter(
+          (u) => typeof u.followersCount !== 'number' || !Number.isFinite(u.followersCount)
+        );
+        if (missingCounts.length > 0) {
+          const { unfollowersService } = await import('../services/unfollowers-service');
+          const list = missingCounts.map((u) => u.username || u.id);
+          const results = await unfollowersService.fetchFollowerCountsDirect(list);
+          if (results && results.length > 0) {
+            const map = new Map(results.map((r) => [r.username.toLowerCase(), r.followersCount]));
+            const updates: { id: string; followersCount: number }[] = [];
+            for (const u of missingCounts) {
+              const count = map.get(u.username.toLowerCase());
+              if (typeof count === 'number') {
+                updates.push({ id: u.id, followersCount: count });
+              }
+            }
+            if (updates.length > 0) {
+              await useAppStore.getState().updateUsersBatch(updates);
+            }
+          }
+        }
+      } catch (countErr) {
+        console.warn('Auto fetch follower counts after scan failed:', countErr);
+      }
+
       await chrome.storage.local.remove([
         'scanProgress',
         'scanStatus',
@@ -511,7 +540,7 @@ const Dashboard: React.FC = () => {
       closeScanningWindow();
       scanningTabIdRef.current = null;
       alert(
-        `Tarama tamamlandı! Liste birleştirildi (eski veri silinmedi).\n` +
+        `Tarama tamamlandı! Tüm kullanıcılar ve takipçi sayıları güncellendi.\n` +
           `Following: ${followingUsers.length}\n` +
           `Followers: ${followersUsers.length}\n` +
           (lastMerge ? `Yeni: ${lastMerge.added} · Güncellenen: ${lastMerge.updated}\n` +

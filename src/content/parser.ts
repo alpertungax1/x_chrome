@@ -88,11 +88,20 @@ export const parseUserFromElement = (element: HTMLElement): Partial<XUser> | nul
       isFollowing = textLines.some(l => l.trim() === 'following' || l.trim() === 'takip ediyorsun');
     }
 
+    // ═══════════════════════════════════════════════════════════
+    // 5. METADATA (network-hook'tan yakalanan takipçi sayıları)
+    // ═══════════════════════════════════════════════════════════
+    const meta = (window as any).__XRM_META__?.[username.toLowerCase()];
+    const followersCount = typeof meta?.followersCount === 'number' ? meta.followersCount : undefined;
+    const followingCount = typeof meta?.followingCount === 'number' ? meta.followingCount : undefined;
+
     return {
       id: username.toLowerCase(),
       username,
-      displayName,
+      displayName: meta?.displayName || displayName,
       avatarUrl,
+      followersCount,
+      followingCount,
       isFollower,
       isFollowing,
       firstSeenAt: Date.now(),

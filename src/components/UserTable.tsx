@@ -262,7 +262,7 @@ export const UserTable: React.FC<UserTableProps> = ({
     }
   };
 
-  // Önbellekteki (xrm_cached_unfollowers) veriler ile takipçi sayılarını otomatik eşitle
+  // 1. Önbellekteki (xrm_cached_unfollowers) veriler ile takipçi sayılarını otomatik eşitle
   useEffect(() => {
     void (async () => {
       try {
@@ -293,6 +293,39 @@ export const UserTable: React.FC<UserTableProps> = ({
         console.warn('Cache sync error:', err);
       }
     })();
+  }, [users, updateUsersBatch]);
+
+  // 2. Takipçi sayısı bilinmeyen kullanıcıları arka planda otomatik X API'den çek (kullanıcının butona basmasına gerek kalmaz)
+  const autoFetchedOnceRef = useRef(false);
+  useEffect(() => {
+    if (autoFetchedOnceRef.current || users.length === 0) return;
+    const unknownUsers = users.filter(
+      (u) => typeof u.followersCount !== 'number' || !Number.isFinite(u.followersCount)
+    );
+    if (unknownUsers.length > 0) {
+      autoFetchedOnceRef.current = true;
+      void (async () => {
+        try {
+          const list = unknownUsers.map((u) => u.username || u.id);
+          const results = await unfollowersService.fetchFollowerCountsDirect(list);
+          if (results && results.length > 0) {
+            const map = new Map(results.map((r) => [r.username.toLowerCase(), r.followersCount]));
+            const updates: { id: string; followersCount: number }[] = [];
+            for (const u of unknownUsers) {
+              const count = map.get(u.username.toLowerCase());
+              if (typeof count === 'number') {
+                updates.push({ id: u.id, followersCount: count });
+              }
+            }
+            if (updates.length > 0) {
+              await updateUsersBatch(updates);
+            }
+          }
+        } catch (err) {
+          console.warn('Auto fetch follower counts failed:', err);
+        }
+      })();
+    }
   }, [users, updateUsersBatch]);
 
   const handleSyncFromCache = async () => {

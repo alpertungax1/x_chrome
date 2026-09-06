@@ -343,16 +343,23 @@ export class XUnfollowersDirectScraper {
       const paramVal = batch.join(',');
 
       try {
-        const json = await this.xRequest(
-          `/i/api/1.1/users/lookup.json?${paramName}=${encodeURIComponent(paramVal)}&include_entities=false`
-        );
+        let json = await this.xRequest('/i/api/1.1/users/lookup.json', {
+          method: 'POST',
+          body: new URLSearchParams({ [paramName]: paramVal }).toString(),
+        });
+        if (!Array.isArray(json)) {
+          // Fallback GET
+          json = await this.xRequest(
+            `/i/api/1.1/users/lookup.json?${paramName}=${encodeURIComponent(paramVal)}&include_entities=false`
+          );
+        }
         if (Array.isArray(json)) {
           for (const u of json) {
             results.push({
               id: String(u.id_str || u.id),
               username: u.screen_name,
               displayName: u.name || u.screen_name,
-              followersCount: u.followers_count || 0,
+              followersCount: typeof u.followers_count === 'number' ? u.followers_count : 0,
               avatar: u.profile_image_url_https || '',
             });
           }
