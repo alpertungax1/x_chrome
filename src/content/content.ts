@@ -250,6 +250,15 @@ function initContentScript() {
       return true;
     }
 
+    if ((message.type as string) === 'LOOKUP_USERS_DIRECT') {
+      const list = (message.payload as { list?: string[] })?.list || [];
+      xUnfollowersDirectScraper
+        .lookupUsers(list)
+        .then((results) => sendResponse({ success: true, results }))
+        .catch((err) => sendResponse({ success: false, error: err?.message || String(err) }));
+      return true;
+    }
+
     if (message.type === 'GET_LOGGED_IN_USER') {
       sendResponse({ username: getLoggedInUsername() });
       return false;

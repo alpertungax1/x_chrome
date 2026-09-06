@@ -108,6 +108,11 @@ export const UserTable: React.FC<UserTableProps> = ({
   const [sorsaProgress, setSorsaProgress] = useState<{ fetched: number; total: number } | null>(null);
   const [sorsaError, setSorsaError] = useState('');
 
+  // Doğrudan X API State'leri (Ücretsiz & Anında Takipçi Çekici)
+  const [xFetchLoading, setXFetchLoading] = useState(false);
+  const [xFetchError, setXFetchError] = useState('');
+  const [xFetchProgress, setXFetchProgress] = useState<{ current: number; total: number } | null>(null);
+
   // Ayarları yükle
   useEffect(() => {
     void (async () => {
@@ -186,6 +191,74 @@ export const UserTable: React.FC<UserTableProps> = ({
     } finally {
       setSorsaLoading(false);
       setTimeout(() => setSorsaProgress(null), 2000);
+    }
+  };
+
+  /**
+   * Doğrudan X API üzerinden 100'erli paketlerle ücretsiz ve anında takipçi sayılarını çeker
+   */
+  const handleFetchFromX = async () => {
+    const unknownUsers = users.filter(
+      (u) => typeof u.followersCount !== 'number' || !Number.isFinite(u.followersCount)
+    );
+    if (unknownUsers.length === 0) {
+      alert(
+        lang === 'tr'
+          ? 'Tüm kullanıcıların takipçi sayıları zaten mevcut.'
+          : 'All users already have follower counts.'
+      );
+      return;
+    }
+
+    setXFetchLoading(true);
+    setXFetchError('');
+    setXFetchProgress({ current: 0, total: unknownUsers.length });
+
+    try {
+      const list = unknownUsers.map((u) => u.username || u.id);
+      const results = await unfollowersService.fetchFollowerCountsDirect(list);
+
+      if (results && results.length > 0) {
+        const resultMap = new Map(results.map((r) => [r.username.toLowerCase(), r.followersCount]));
+        const updates: { id: string; followersCount: number }[] = [];
+
+        for (const u of unknownUsers) {
+          const count = resultMap.get(u.username.toLowerCase());
+          if (typeof count === 'number') {
+            updates.push({ id: u.id, followersCount: count });
+          }
+        }
+
+        if (updates.length > 0) {
+          await updateUsersBatch(updates);
+          setXFetchProgress({ current: updates.length, total: unknownUsers.length });
+          alert(
+            lang === 'tr'
+              ? `Harika! ${updates.length} kullanıcının gerçek takipçi sayısı doğrudan X'ten çekildi ve güncellendi!`
+              : `Success! ${updates.length} users updated directly from X!`
+          );
+        } else {
+          setXFetchError(
+            lang === 'tr'
+              ? 'X API kullanıcıları döndüremedi. Lütfen açık olan x.com sekmesini yenileyip tekrar deneyin.'
+              : 'Failed to fetch users from X API.'
+          );
+        }
+      } else {
+        setXFetchError(
+          lang === 'tr'
+            ? 'X API ile bağlantı kurulamadı. Lütfen açık bir x.com sekmesi olduğundan emin olun.'
+            : 'Could not connect to X API.'
+        );
+      }
+    } catch (err: any) {
+      console.warn('handleFetchFromX error:', err);
+      const msg = err?.message || 'X API Hatası';
+      setXFetchError(msg);
+      alert(lang === 'tr' ? `Hata: ${msg}` : `Error: ${msg}`);
+    } finally {
+      setXFetchLoading(false);
+      setTimeout(() => setXFetchProgress(null), 3000);
     }
   };
 
@@ -577,8 +650,33 @@ export const UserTable: React.FC<UserTableProps> = ({
             </span>
           </div>
 
-          {/* Anti-Ban & Güvenlik Butonu */}
+          {/* Sağ Butonlar: Takipçi Sayısı Çekici & Anti-Ban */}
           <div className="flex items-center gap-2">
+            {countStats.total - countStats.known > 0 && (
+              <button
+                type="button"
+                onClick={handleFetchFromX}
+                disabled={xFetchLoading}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg bg-blue-600 hover:bg-blue-700 text-white shadow-xs transition-all disabled:opacity-50"
+                title="Açık X oturumunuzdan tüm eksik takipçi sayılarını ücretsiz çeker"
+              >
+                {xFetchLoading ? (
+                  <Loader2 size={13} className="animate-spin" />
+                ) : (
+                  <span>⚡</span>
+                )}
+                <span>
+                  {xFetchLoading
+                    ? lang === 'tr'
+                      ? 'Çekiliyor...'
+                      : 'Fetching...'
+                    : lang === 'tr'
+                    ? `Sayıları Çek (${countStats.total - countStats.known})`
+                    : `Fetch Counts (${countStats.total - countStats.known})`}
+                </span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={() => setShowSettingsModal(!showSettingsModal)}
@@ -923,7 +1021,30 @@ export const UserTable: React.FC<UserTableProps> = ({
                 {sorsaError && <p className="text-xs text-red-600 mt-1 font-medium">{sorsaError}</p>}
               </div>
             </div>
-            <div className="flex items-center gap-2 self-end sm:self-center flex-shrink-0">
+            <div className="flex flex-wrap items-center gap-2 self-end sm:self-center flex-shrink-0">
+              <button
+                type="button"
+                onClick={handleFetchFromX}
+                disabled={xFetchLoading}
+                className="text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white px-3.5 py-1.5 rounded-lg shadow-sm transition-all whitespace-nowrap flex items-center gap-1.5 disabled:opacity-50"
+                title="Açık X oturumunuzdan tüm eksik takipçi sayılarını ücretsiz ve anında çeker"
+              >
+                {xFetchLoading ? (
+                  <Loader2 size={13} className="animate-spin" />
+                ) : (
+                  <span>⚡</span>
+                )}
+                <span>
+                  {xFetchLoading
+                    ? lang === 'tr'
+                      ? 'X\'ten Çekiliyor...'
+                      : 'Fetching from X...'
+                    : lang === 'tr'
+                    ? "X'ten Sayıları Çek (Ücretsiz)"
+                    : 'Fetch from X'}
+                </span>
+              </button>
+
               <button
                 type="button"
                 onClick={handleSyncFromCache}
@@ -932,6 +1053,7 @@ export const UserTable: React.FC<UserTableProps> = ({
               >
                 {lang === 'tr' ? '🔄 Önbellekten Eşitle' : '🔄 Sync from Cache'}
               </button>
+
               <button
                 type="button"
                 onClick={handleFetchWithSorsa}

@@ -290,6 +290,34 @@ export class UnfollowersService {
   }
 
   /**
+   * X Oturumu üzerinden 100'erli paketlerle gerçek takipçi sayılarını çeker (Ücretsiz & Hızlı)
+   */
+  public async fetchFollowerCountsDirect(
+    usernamesOrIds: string[]
+  ): Promise<{ username: string; followersCount: number; id?: string; avatar?: string; displayName?: string }[]> {
+    const tabId = await this.ensureXSession();
+    const response: any = await new Promise((resolve, reject) => {
+      chrome.tabs.sendMessage(
+        tabId,
+        { type: 'LOOKUP_USERS_DIRECT', payload: { list: usernamesOrIds } },
+        (res) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+          } else {
+            resolve(res);
+          }
+        }
+      );
+    });
+
+    if (!response?.success) {
+      throw new Error(response?.error || 'Kullanıcı bilgileri çekilemedi.');
+    }
+
+    return response.results || [];
+  }
+
+  /**
    * Anti-Ban & Doğal İnsan Davranışı Simülasyonlu Rastgele Süre Hesaplayıcı
    */
   public calculateDelayMs(

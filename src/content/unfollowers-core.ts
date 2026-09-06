@@ -329,6 +329,46 @@ export class XUnfollowersDirectScraper {
     return nonFollowers;
   }
 
+  public async lookupUsers(
+    usersOrScreenNames: string[]
+  ): Promise<{ username: string; followersCount: number; id?: string; avatar?: string; displayName?: string }[]> {
+    const results: { username: string; followersCount: number; id?: string; avatar?: string; displayName?: string }[] = [];
+
+    // 100'erli paketler halinde çağır
+    for (let i = 0; i < usersOrScreenNames.length; i += 100) {
+      if (this.stopFlag) break;
+      const batch = usersOrScreenNames.slice(i, i + 100);
+      const isNumeric = batch.every((s) => /^\d+$/.test(s));
+      const paramName = isNumeric ? 'user_id' : 'screen_name';
+      const paramVal = batch.join(',');
+
+      try {
+        const json = await this.xRequest(
+          `/i/api/1.1/users/lookup.json?${paramName}=${encodeURIComponent(paramVal)}&include_entities=false`
+        );
+        if (Array.isArray(json)) {
+          for (const u of json) {
+            results.push({
+              id: String(u.id_str || u.id),
+              username: u.screen_name,
+              displayName: u.name || u.screen_name,
+              followersCount: u.followers_count || 0,
+              avatar: u.profile_image_url_https || '',
+            });
+          }
+        }
+      } catch (err) {
+        console.warn('users/lookup.json batch error:', err);
+      }
+
+      if (i + 100 < usersOrScreenNames.length) {
+        await sleep(350);
+      }
+    }
+
+    return results;
+  }
+
   public async unfollowUser(userId: string): Promise<boolean> {
     await this.xRequest('/i/api/1.1/friendships/destroy.json', {
       method: 'POST',
