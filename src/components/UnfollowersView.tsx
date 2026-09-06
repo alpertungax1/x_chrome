@@ -491,9 +491,10 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
         return next;
       });
 
-      void applyUnfollow(user.username);
     } catch (err: any) {
-      alert('Takipten çıkarılamadı: ' + (err?.message || String(err)));
+      console.warn(`Unfollow @${user.username} failed:`, err);
+      setStatusText(`@${user.username} çıkarılamadı: ${err?.message || 'Hata'}`);
+      setStatusType('warn');
     }
   };
 

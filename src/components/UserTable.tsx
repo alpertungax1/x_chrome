@@ -369,16 +369,10 @@ export const UserTable: React.FC<UserTableProps> = ({
             continue;
           }
 
-          // Fallback tekil unfollow fonksiyonu
-          if (onUnfollow) {
-            try {
-              const res = await onUnfollow(user.username);
-              if (res) {
-                done++;
-                batchConsecutive++;
-              }
-            } catch (_) {}
-          }
+          // Hata durumunda (hesap silinmiş, askıya alınmış vb.) ASLA pencere veya alert açma
+          // Durumu loglayıp otomatik olarak sıradaki hesaba devam et
+          setBulkStatusText(`@${user.username} atlandı, diğerine geçiliyor...`);
+          await new Promise((r) => setTimeout(r, 600));
         }
 
         if (i < selectedFollowing.length - 1 && !bulkAbortRef.current) {
@@ -1063,18 +1057,18 @@ export const UserTable: React.FC<UserTableProps> = ({
                           {user.isFollowing && (
                             <button
                               onClick={async () => {
-                                if (onUnfollow) {
-                                  await onUnfollow(user.username);
-                                } else {
-                                  try {
+                                try {
+                                  if (user.id) {
                                     await unfollowersService.unfollowUser({
                                       id: user.id,
                                       username: user.username,
                                     });
                                     await applyUnfollow(user.username);
-                                  } catch (e: any) {
-                                    alert('Hata: ' + e?.message);
+                                  } else if (onUnfollow) {
+                                    await onUnfollow(user.username);
                                   }
+                                } catch (e: any) {
+                                  console.warn(`Unfollow @${user.username} failed:`, e);
                                 }
                               }}
                               disabled={!!actionInProgress || isBulkRunning}

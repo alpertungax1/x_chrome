@@ -663,7 +663,7 @@ const Dashboard: React.FC = () => {
         // Listeden düş: takip etmiyorsan sil; hâlâ takipçiyse sadece isFollowing=false
         await useAppStore.getState().applyUnfollow(username);
       } else {
-        alert(`${username} takipten çıkarılamadı. Lütfen manuel olarak deneyin.`);
+        console.warn(`@${username} takipten çıkarılamadı.`);
       }
       return success;
     } finally {
@@ -678,7 +678,7 @@ const Dashboard: React.FC = () => {
       if (success) {
         await loadUsers();
       } else {
-        alert(`${username} takip edilemedi. Lütfen manuel olarak deneyin.`);
+        console.warn(`@${username} takip edilemedi.`);
       }
       return success;
     } finally {
