@@ -272,10 +272,20 @@ export function mergeScanUsers(
 ): Partial<XUser>[] {
   const map = new Map<string, Partial<XUser>>();
 
-  const upsert = (user: Partial<XUser>, defaults: { isFollowing?: boolean; isFollower?: boolean }) => {
+  const upsert = (user: Partial<XUser>, defaults: { isFollowing?: boolean; isFollower?: boolean }, isFromFollowing: boolean) => {
     if (!user.id && !user.username) return;
     const id = normalizeId((user.id || user.username)!);
     const prev = map.get(id);
+    
+    // YALNIZCA Following listesinden geliyorsa scanOrder ezilir,
+    // VEYA daha önce hiç scanOrder atanmadıysa (sadece follower olanlar için) atanır.
+    let newScanOrder = prev?.scanOrder;
+    if (isFromFollowing && typeof user.scanOrder === 'number') {
+      newScanOrder = user.scanOrder;
+    } else if (typeof prev?.scanOrder !== 'number' && typeof user.scanOrder === 'number') {
+      newScanOrder = user.scanOrder;
+    }
+
     map.set(id, {
       ...prev,
       ...user,
@@ -285,7 +295,7 @@ export function mergeScanUsers(
       displayName: user.displayName || prev?.displayName || user.username || id,
       isFollowing: Boolean(prev?.isFollowing || user.isFollowing || defaults.isFollowing),
       isFollower: Boolean(prev?.isFollower || user.isFollower || defaults.isFollower),
-      scanOrder: typeof user.scanOrder === 'number' ? user.scanOrder : prev?.scanOrder,
+      scanOrder: newScanOrder,
       followedAt: user.followedAt ?? prev?.followedAt,
       followerSince: user.followerSince ?? prev?.followerSince,
       firstSeenAt: user.firstSeenAt ?? prev?.firstSeenAt,
@@ -301,11 +311,10 @@ export function mergeScanUsers(
   };
 
   for (const u of followingUsers) {
-    // following sayfasından gelenler en azından isFollowing
-    upsert(u, { isFollowing: true });
+    upsert(u, { isFollowing: true }, true);
   }
   for (const u of followersUsers) {
-    upsert(u, { isFollower: true });
+    upsert(u, { isFollower: true }, false);
   }
 
   return Array.from(map.values());
