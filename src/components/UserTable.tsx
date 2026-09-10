@@ -450,10 +450,12 @@ export const UserTable: React.FC<UserTableProps> = ({
           const hasOrderB = typeof b.scanOrder === 'number' && Number.isFinite(b.scanOrder);
 
           // 1. İkisinde de taranmış gerçek X API sırası (scanOrder) varsa:
-          // Kullanıcının verisinde: #1 = En Eski Takip Edilen, #7486 = En Yeni Takip Edilen
+          // X API sıralaması: #1 = EN YENİ takip edilen, #7486 = EN ESKİ takip edilen!
           if (hasOrderA && hasOrderB) {
             if (a.scanOrder !== b.scanOrder) {
-              return sortOption === 'oldest' ? a.scanOrder! - b.scanOrder! : b.scanOrder! - a.scanOrder!;
+              // newest: #1, #2... (en son takip edilenler en üstte)
+              // oldest: #7486, #7485... (en ilk takip edilenler en üstte)
+              return sortOption === 'newest' ? a.scanOrder! - b.scanOrder! : b.scanOrder! - a.scanOrder!;
             }
           }
 
