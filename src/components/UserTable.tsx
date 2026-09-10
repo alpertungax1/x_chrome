@@ -445,22 +445,28 @@ export const UserTable: React.FC<UserTableProps> = ({
 
     // Kronolojik skor hesaplayıcı:
     // Skor ne kadar BÜYÜKSE o kadar YENİ, ne kadar KÜÇÜKSE o kadar ESKİ.
+    //
+    // Öncelik: scanOrder (sabit base, API'nin gerçek sırası) →
+    //           followedAt (yalnızca scanOrder yoksa) → firstSeenAt → numericId fallback
+    //
+    // NOT: followedAt önceki bozuk taramalarda tüm kullanıcılara "şu an" olarak
+    // yazılmış olabilir. scanOrder her yeni taramada güvenilir şekilde güncellenir
+    // ve sabit bir base (1_000_000_000) ile normalize edilerek karıştırma olmaz.
     const getChronologicalScore = (u: XUser): number => {
-      // 1. followedAt: ilk ekleme anı — artık her taramada üzerine yazılmıyor
+      // 1. scanOrder: tarama API'sinin kesin sırası (0 = en son takip edilen)
+      //    Sabit base kullanıyoruz — kullanıcı başına firstSeenAt farkı skoru bozmasın.
+      if (typeof u.scanOrder === 'number') {
+        return 1_000_000_000 - u.scanOrder; // büyük = yeni, küçük = eski
+      }
+      // 2. followedAt (scanOrder yoksa — ilk tarama öncesi kayıtlar)
       if (typeof u.followedAt === 'number' && u.followedAt > 0) {
         return u.followedAt;
       }
-      // 2. scanOrder: X API sırası (0 = en son takip edilen, N = daha eski)
-      //    Eski kayıtlarda followedAt yoksa, scanOrder en güvenilir sinyaldir.
-      if (typeof u.scanOrder === 'number') {
-        const base = u.firstSeenAt || Date.now();
-        return base - (u.scanOrder * 60000);
-      }
-      // 3. firstSeenAt: ilk veritabanına eklenme zamanı
+      // 3. firstSeenAt
       if (typeof u.firstSeenAt === 'number' && u.firstSeenAt > 0) {
         return u.firstSeenAt;
       }
-      // 4. numericId → Snowflake (hesabın açılış zamanı, takip sırası değil — son çare)
+      // 4. numericId → Snowflake (son çare)
       if (u.numericId && /^\d+$/.test(u.numericId)) {
         try {
           const idBig = BigInt(u.numericId);
