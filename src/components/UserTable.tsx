@@ -451,12 +451,13 @@ export const UserTable: React.FC<UserTableProps> = ({
     //
     // NOT: followedAt önceki bozuk taramalarda tüm kullanıcılara "şu an" olarak
     // yazılmış olabilir. scanOrder her yeni taramada güvenilir şekilde güncellenir
-    // ve sabit bir base (1_000_000_000) ile normalize edilerek karıştırma olmaz.
+    // ve epoch ölçeğinde tutarlı skor.
     const getChronologicalScore = (u: XUser): number => {
       // 1. scanOrder: tarama API'sinin kesin sırası (0 = en son takip edilen)
-      //    Sabit base kullanıyoruz — kullanıcı başına firstSeenAt farkı skoru bozmasın.
+      //    lastSeenAt tüm batch taramasında aynı now değeri → epoch ölçeğinde tutarlı skor.
       if (typeof u.scanOrder === 'number') {
-        return 1_000_000_000 - u.scanOrder; // büyük = yeni, küçük = eski
+        const base = u.lastSeenAt || u.firstSeenAt || Date.now();
+        return base - u.scanOrder * 1000; // epoch-scale; büyük = yeni, küçük = eski
       }
       // 2. followedAt (scanOrder yoksa — ilk tarama öncesi kayıtlar)
       if (typeof u.followedAt === 'number' && u.followedAt > 0) {
@@ -491,9 +492,18 @@ export const UserTable: React.FC<UserTableProps> = ({
         sorted.sort((a, b) => {
           const scoreA = getChronologicalScore(a);
           const scoreB = getChronologicalScore(b);
-          if (scoreA !== scoreB) return scoreA - scoreB; // En eski (en düşük timestamp) en üstte
+          if (scoreA !== scoreB) return scoreA - scoreB;
           return a.displayName.localeCompare(b.displayName);
         });
+        // DEBUG: ilk 5 kullanıcının skor bilgisini konsola yaz
+        console.table(sorted.slice(0, 5).map(u => ({
+          username: u.username,
+          scanOrder: u.scanOrder,
+          followedAt: u.followedAt,
+          lastSeenAt: u.lastSeenAt,
+          firstSeenAt: u.firstSeenAt,
+          score: getChronologicalScore(u),
+        })));
         break;
       case 'followers_desc':
         sorted.sort((a, b) => (b.followersCount ?? -1) - (a.followersCount ?? -1));
