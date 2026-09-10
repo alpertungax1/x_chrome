@@ -459,6 +459,7 @@ export class XUnfollowersDirectScraper {
     const now = Date.now();
     const mapToUser = (u: UnfollowerUser, isFollowing: boolean, isFollower: boolean | null, orderIndex: number = 0) => ({
       id: u.username.toLowerCase(),
+      numericId: /^\d+$/.test(u.id) ? u.id : undefined,
       username: u.username,
       displayName: u.name,
       avatarUrl: u.avatar,

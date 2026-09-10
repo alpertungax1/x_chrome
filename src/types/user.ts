@@ -21,6 +21,7 @@ export interface XUser {
 
   mutualCount?: number;
   scanOrder?: number; // Takip/tarama sırası: 0 = En yeni, 1, 2, ... N = En eski
+  numericId?: string; // X REST ID / Snowflake ID
 }
 
 export interface RelationshipSnapshot {

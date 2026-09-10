@@ -445,22 +445,33 @@ export const UserTable: React.FC<UserTableProps> = ({
 
     // Kronolojik skor hesaplayıcı:
     // Skor ne kadar BÜYÜKSE o kadar YENİ, ne kadar KÜÇÜKSE o kadar ESKİ.
+    // Tüm değerler milisaniye cinsinden standart Epoch zaman damgasıdır.
     const getChronologicalScore = (u: XUser): number => {
-      // 1. scanOrder: X API tarama sırası (0 = en son eklenen yeni, 1000 = en ilk eklenen eski)
-      if (typeof u.scanOrder === 'number') {
-        return 1000000000 - u.scanOrder;
-      }
-      // 2. followedAt zaman damgası (en yeni = en büyük timestamp)
+      // 1. followedAt zaman damgası (en yeni = en büyük timestamp)
       if (typeof u.followedAt === 'number' && u.followedAt > 0) {
         return u.followedAt;
       }
-      // 3. followerSince zaman damgası
+      // 2. followerSince zaman damgası
       if (typeof u.followerSince === 'number' && u.followerSince > 0) {
         return u.followerSince;
+      }
+      // 3. scanOrder: X API tarama sırası (0 = en son eklenen yeni, 1000 = en eski)
+      if (typeof u.scanOrder === 'number') {
+        const base = u.lastSeenAt || u.firstSeenAt || Date.now();
+        return base - (u.scanOrder * 60000);
       }
       // 4. firstSeenAt zaman damgası
       if (typeof u.firstSeenAt === 'number' && u.firstSeenAt > 0) {
         return u.firstSeenAt;
+      }
+      // 5. numericId (Twitter Snowflake ID):
+      // Twitter Snowflake epoch: 1288834974657
+      if (u.numericId && /^\d+$/.test(u.numericId)) {
+        try {
+          const idBig = BigInt(u.numericId);
+          const timestamp = Number((idBig >> 22n) + 1288834974657n);
+          if (Number.isFinite(timestamp) && timestamp > 0) return timestamp;
+        } catch (_) {}
       }
       return 0;
     };
@@ -471,7 +482,7 @@ export const UserTable: React.FC<UserTableProps> = ({
         sorted.sort((a, b) => {
           const scoreA = getChronologicalScore(a);
           const scoreB = getChronologicalScore(b);
-          if (scoreA !== scoreB) return scoreB - scoreA; // En yeni (en yüksek skor) en üstte
+          if (scoreA !== scoreB) return scoreB - scoreA; // En yeni (en yüksek timestamp) en üstte
           return a.displayName.localeCompare(b.displayName);
         });
         break;
@@ -479,7 +490,7 @@ export const UserTable: React.FC<UserTableProps> = ({
         sorted.sort((a, b) => {
           const scoreA = getChronologicalScore(a);
           const scoreB = getChronologicalScore(b);
-          if (scoreA !== scoreB) return scoreA - scoreB; // En eski (en düşük skor) en üstte
+          if (scoreA !== scoreB) return scoreA - scoreB; // En eski (en düşük timestamp) en üstte
           return a.displayName.localeCompare(b.displayName);
         });
         break;
@@ -970,6 +981,13 @@ export const UserTable: React.FC<UserTableProps> = ({
                   } else {
                     setMaxFollowersInput(String(n));
                     setMinFollowersInput('');
+                    // Eğer takipçi sayısı eksik hesaplar varsa hemen X'ten otomatik tamamla
+                    const hasUnknown = users.some(
+                      (u) => typeof u.followersCount !== 'number' || !Number.isFinite(u.followersCount) || u.followersCount <= 0
+                    );
+                    if (hasUnknown && !xFetchLoading) {
+                      void handleFetchFromX();
+                    }
                   }
                 }}
                 className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${

@@ -30,6 +30,7 @@ export const userRepository = {
           ...existing,
           ...user,
           id,
+          numericId: user.numericId || existing.numericId,
           isFollowing: Boolean(existing.isFollowing || user.isFollowing),
           isFollower: Boolean(existing.isFollower || user.isFollower),
           scanOrder: typeof user.scanOrder === 'number' ? user.scanOrder : existing.scanOrder,
@@ -41,6 +42,7 @@ export const userRepository = {
         tx.store.put({
           ...user,
           id,
+          numericId: user.numericId,
           username: user.username || id,
           displayName: user.displayName || user.username || id,
           isFollowing: Boolean(user.isFollowing),
@@ -146,6 +148,7 @@ export const userRepository = {
           displayName: user.displayName || existing.displayName,
           avatarUrl: user.avatarUrl || existing.avatarUrl,
           bio: user.bio ?? existing.bio,
+          numericId: user.numericId || existing.numericId,
           isFollowing,
           isFollower,
           firstSeenAt: existing.firstSeenAt || user.firstSeenAt || now,
@@ -173,6 +176,7 @@ export const userRepository = {
       } else {
         await tx.store.put({
           id,
+          numericId: user.numericId,
           username: user.username || id,
           displayName: user.displayName || user.username || id,
           avatarUrl: user.avatarUrl,
@@ -276,6 +280,7 @@ export function mergeScanUsers(
       ...prev,
       ...user,
       id,
+      numericId: user.numericId || prev?.numericId,
       username: user.username || prev?.username || id,
       displayName: user.displayName || prev?.displayName || user.username || id,
       isFollowing: Boolean(prev?.isFollowing || user.isFollowing || defaults.isFollowing),
