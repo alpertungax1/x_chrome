@@ -546,8 +546,12 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
     // 2. Sıralama
     const sorted = [...filtered];
     switch (sortOption) {
-      case 'oldest':
+      case 'default':
+        // Orijinal taranan liste en eskiden başladığı için default (en yeni) tersine çevrilir
         sorted.reverse();
+        break;
+      case 'oldest':
+        // Eskiden yeniye: Orijinal takip sırası (#1, #2...) korunur
         break;
       case 'followers_desc':
         sorted.sort((a, b) => b.followers - a.followers);
@@ -561,7 +565,6 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
       case 'name_desc':
         sorted.sort((a, b) => b.name.localeCompare(a.name));
         break;
-      case 'default':
       default:
         break;
     }
