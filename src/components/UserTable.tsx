@@ -443,67 +443,26 @@ export const UserTable: React.FC<UserTableProps> = ({
       });
     }
 
-    // Kronolojik skor hesaplayıcı:
-    // Skor ne kadar BÜYÜKSE o kadar YENİ, ne kadar KÜÇÜKSE o kadar ESKİ.
-    //
-    // Öncelik: scanOrder (sabit base, API'nin gerçek sırası) →
-    //           followedAt (yalnızca scanOrder yoksa) → firstSeenAt → numericId fallback
-    //
-    // NOT: followedAt önceki bozuk taramalarda tüm kullanıcılara "şu an" olarak
-    // yazılmış olabilir. scanOrder her yeni taramada güvenilir şekilde güncellenir
-    // ve epoch ölçeğinde tutarlı skor.
-    const getChronologicalScore = (u: XUser): number => {
-      // 1. scanOrder: tarama API'sinin kesin sırası (0 = en son takip edilen)
-      //    lastSeenAt tüm batch taramasında aynı now değeri → epoch ölçeğinde tutarlı skor.
-      if (typeof u.scanOrder === 'number') {
-        const base = u.lastSeenAt || u.firstSeenAt || Date.now();
-        return base - u.scanOrder * 1000; // epoch-scale; büyük = yeni, küçük = eski
-      }
-      // 2. followedAt (scanOrder yoksa — ilk tarama öncesi kayıtlar)
-      if (typeof u.followedAt === 'number' && u.followedAt > 0) {
-        return u.followedAt;
-      }
-      // 3. firstSeenAt
-      if (typeof u.firstSeenAt === 'number' && u.firstSeenAt > 0) {
-        return u.firstSeenAt;
-      }
-      // 4. numericId → Snowflake (son çare)
-      if (u.numericId && /^\d+$/.test(u.numericId)) {
-        try {
-          const idBig = BigInt(u.numericId);
-          const ts = Number((idBig >> 22n) + 1288834974657n);
-          if (Number.isFinite(ts) && ts > 0) return ts;
-        } catch (_) {}
-      }
-      return 0;
-    };
-
     const sorted = [...list];
     switch (sortOption) {
       case 'newest':
         sorted.sort((a, b) => {
-          const scoreA = getChronologicalScore(a);
-          const scoreB = getChronologicalScore(b);
-          if (scoreA !== scoreB) return scoreB - scoreA; // En yeni (en yüksek timestamp) en üstte
+          // X API'sinde scanOrder: 0 = en yeni eklenen
+          // newest = küçük scanOrder üstte
+          const orderA = typeof a.scanOrder === 'number' ? a.scanOrder : 999999999;
+          const orderB = typeof b.scanOrder === 'number' ? b.scanOrder : 999999999;
+          if (orderA !== orderB) return orderA - orderB;
           return a.displayName.localeCompare(b.displayName);
         });
         break;
       case 'oldest':
         sorted.sort((a, b) => {
-          const scoreA = getChronologicalScore(a);
-          const scoreB = getChronologicalScore(b);
-          if (scoreA !== scoreB) return scoreA - scoreB;
+          // oldest = büyük scanOrder (veya undefined) üstte
+          const orderA = typeof a.scanOrder === 'number' ? a.scanOrder : 999999999;
+          const orderB = typeof b.scanOrder === 'number' ? b.scanOrder : 999999999;
+          if (orderA !== orderB) return orderB - orderA;
           return a.displayName.localeCompare(b.displayName);
         });
-        // DEBUG: ilk 5 kullanıcının skor bilgisini konsola yaz
-        console.table(sorted.slice(0, 5).map(u => ({
-          username: u.username,
-          scanOrder: u.scanOrder,
-          followedAt: u.followedAt,
-          lastSeenAt: u.lastSeenAt,
-          firstSeenAt: u.firstSeenAt,
-          score: getChronologicalScore(u),
-        })));
         break;
       case 'followers_desc':
         sorted.sort((a, b) => (b.followersCount ?? -1) - (a.followersCount ?? -1));
