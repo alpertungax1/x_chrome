@@ -467,11 +467,11 @@ export class XUnfollowersDirectScraper {
       followingCount: typeof u.followingCount === 'number' ? u.followingCount : 0,
       isFollowing,
       isFollower: isFollower ?? false,
-      firstSeenAt: now - (orderIndex * 1000),
+      firstSeenAt: now,  // mergeScan'da existing.firstSeenAt korunur, bu yeni kayıtlar içindir
       lastSeenAt: now,
-      followedAt: isFollowing ? (now - (orderIndex * 1000)) : undefined,
-      followerSince: isFollower ? (now - (orderIndex * 1000)) : undefined,
       scanOrder: orderIndex,
+      // followedAt ve followerSince kasıtlı bırakıldı — DB'de önceki değer korunur (mergeScan logic),
+      // yeni kayıtlar için repository now atar.
     });
 
     // Eğer durdurulduysa veya takip edilen bulunamadıysa olanı dön
