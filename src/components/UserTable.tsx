@@ -416,7 +416,7 @@ export const UserTable: React.FC<UserTableProps> = ({
 
   const hasCountFilter = maxFollowers != null || minFollowers != null;
   const unknownCountInFilter = hasCountFilter
-    ? users.filter((u) => typeof u.followersCount !== 'number' || !Number.isFinite(u.followersCount)).length
+    ? users.filter((u) => typeof u.followersCount !== 'number' || !Number.isFinite(u.followersCount) || u.followersCount <= 0).length
     : 0;
 
   const filteredUsers = useMemo(() => {
@@ -433,8 +433,8 @@ export const UserTable: React.FC<UserTableProps> = ({
     if (hasCountFilter) {
       list = list.filter((u) => {
         const c = u.followersCount;
-        // Takipçi filtresi seçildiğinde (ör. <50), sayısı bilinmeyen veya 0 kalan hesaplar dahil edilmez
-        if (typeof c !== 'number' || !Number.isFinite(c) || c <= 0) {
+        // Sayı tanımlı değilse veya geçersizse filtre dışı bırak
+        if (typeof c !== 'number' || !Number.isFinite(c)) {
           return false;
         }
         if (maxFollowers != null && c >= maxFollowers) return false;
@@ -443,34 +443,44 @@ export const UserTable: React.FC<UserTableProps> = ({
       });
     }
 
+    // Kronolojik skor hesaplayıcı:
+    // Skor ne kadar BÜYÜKSE o kadar YENİ, ne kadar KÜÇÜKSE o kadar ESKİ.
+    const getChronologicalScore = (u: XUser): number => {
+      // 1. scanOrder: X API tarama sırası (0 = en son eklenen yeni, 1000 = en ilk eklenen eski)
+      if (typeof u.scanOrder === 'number') {
+        return 1000000000 - u.scanOrder;
+      }
+      // 2. followedAt zaman damgası (en yeni = en büyük timestamp)
+      if (typeof u.followedAt === 'number' && u.followedAt > 0) {
+        return u.followedAt;
+      }
+      // 3. followerSince zaman damgası
+      if (typeof u.followerSince === 'number' && u.followerSince > 0) {
+        return u.followerSince;
+      }
+      // 4. firstSeenAt zaman damgası
+      if (typeof u.firstSeenAt === 'number' && u.firstSeenAt > 0) {
+        return u.firstSeenAt;
+      }
+      return 0;
+    };
+
     const sorted = [...list];
     switch (sortOption) {
       case 'newest':
         sorted.sort((a, b) => {
-          if (typeof a.scanOrder === 'number' && typeof b.scanOrder === 'number') {
-            return a.scanOrder - b.scanOrder;
-          }
-          const timeA = a.followedAt ?? a.followerSince ?? a.firstSeenAt ?? 0;
-          const timeB = b.followedAt ?? b.followerSince ?? b.firstSeenAt ?? 0;
-          if (timeA !== timeB) return timeB - timeA;
-          const numA = Number(a.id);
-          const numB = Number(b.id);
-          if (Number.isFinite(numA) && Number.isFinite(numB)) return numB - numA;
+          const scoreA = getChronologicalScore(a);
+          const scoreB = getChronologicalScore(b);
+          if (scoreA !== scoreB) return scoreB - scoreA; // En yeni (en yüksek skor) en üstte
           return a.displayName.localeCompare(b.displayName);
         });
         break;
       case 'oldest':
         sorted.sort((a, b) => {
-          if (typeof a.scanOrder === 'number' && typeof b.scanOrder === 'number') {
-            return b.scanOrder - a.scanOrder;
-          }
-          const timeA = a.followedAt ?? a.followerSince ?? a.firstSeenAt ?? 0;
-          const timeB = b.followedAt ?? b.followerSince ?? b.firstSeenAt ?? 0;
-          if (timeA !== timeB) return timeA - timeB;
-          const numA = Number(a.id);
-          const numB = Number(b.id);
-          if (Number.isFinite(numA) && Number.isFinite(numB)) return numA - numB;
-          return b.displayName.localeCompare(a.displayName);
+          const scoreA = getChronologicalScore(a);
+          const scoreB = getChronologicalScore(b);
+          if (scoreA !== scoreB) return scoreA - scoreB; // En eski (en düşük skor) en üstte
+          return a.displayName.localeCompare(b.displayName);
         });
         break;
       case 'followers_desc':
