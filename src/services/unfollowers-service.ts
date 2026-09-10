@@ -208,15 +208,39 @@ export class UnfollowersService {
     }
 
     // Seçilen sekmede content script'in hazır olduğundan emin ol
-    try {
-      await chrome.tabs.sendMessage(bestTabId, { type: 'PING' });
-    } catch {
-      // Content script sekmede henüz yoksa veya eski ise
+    let ready = false;
+    for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        await chrome.tabs.reload(bestTabId);
-        await this.waitForTabLoaded(bestTabId);
-        await sleep(1500);
-      } catch (_) {}
+        const pingRes: any = await new Promise((resolve, reject) => {
+          chrome.tabs.sendMessage(bestTabId, { type: 'PING' }, (res) => {
+            if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+            else resolve(res);
+          });
+        });
+        if (pingRes?.ok) {
+          ready = true;
+          break;
+        }
+      } catch {
+        if (attempt === 0) {
+          try {
+            const manifest = chrome.runtime.getManifest();
+            const cs = manifest.content_scripts?.find((c) => c.js?.some((f) => f.includes('content')));
+            if (cs?.js) {
+              await chrome.scripting.executeScript({
+                target: { tabId: bestTabId },
+                files: cs.js,
+              });
+            }
+          } catch {
+            try {
+              await chrome.tabs.reload(bestTabId);
+              await this.waitForTabLoaded(bestTabId);
+            } catch (_) {}
+          }
+        }
+        await sleep(1000);
+      }
     }
 
     return bestTabId;
@@ -327,16 +351,26 @@ export class UnfollowersService {
     }
   }
 
-  public async unfollowUser(user: { id: string; username: string }): Promise<boolean> {
+  public async unfollowUser(user: { id?: string; username: string }): Promise<boolean> {
     const tabId = await this.ensureXSession();
     const response: any = await new Promise((resolve, reject) => {
-      chrome.tabs.sendMessage(tabId, { type: 'UNFOLLOW_USER_DIRECT', payload: { userId: user.id } }, (res) => {
-        if (chrome.runtime.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-        } else {
-          resolve(res);
+      chrome.tabs.sendMessage(
+        tabId,
+        {
+          type: 'UNFOLLOW_USER_DIRECT',
+          payload: {
+            userId: user.id,
+            username: user.username,
+          },
+        },
+        (res) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+          } else {
+            resolve(res);
+          }
         }
-      });
+      );
     });
 
     if (!response?.success) {

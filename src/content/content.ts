@@ -256,13 +256,14 @@ function initContentScript() {
     }
 
     if ((message.type as string) === 'UNFOLLOW_USER_DIRECT') {
-      const userId = (message.payload as { userId?: string })?.userId;
-      if (!userId) {
-        sendResponse({ success: false, error: 'User ID missing' });
+      const payload = (message.payload as { userId?: string; username?: string }) || {};
+      const { userId, username } = payload;
+      if (!userId && !username) {
+        sendResponse({ success: false, error: 'User ID veya username eksik' });
         return false;
       }
       xUnfollowersDirectScraper
-        .unfollowUser(userId)
+        .unfollowUser({ userId, username })
         .then(() => sendResponse({ success: true }))
         .catch((err) => sendResponse({ success: false, error: err?.message || String(err) }));
       return true;

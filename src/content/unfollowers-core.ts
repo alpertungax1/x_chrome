@@ -563,12 +563,74 @@ export class XUnfollowersDirectScraper {
     return results;
   }
 
-  public async unfollowUser(userId: string): Promise<boolean> {
-    await this.xRequest('/i/api/1.1/friendships/destroy.json', {
-      method: 'POST',
-      body: new URLSearchParams({ user_id: userId }).toString(),
-    });
-    return true;
+  public async unfollowUser(
+    target: { userId?: string; username?: string } | string
+  ): Promise<boolean> {
+    let rawUserId = typeof target === 'string' ? target : target.userId;
+    let rawUsername = typeof target === 'string' ? undefined : target.username;
+
+    // Eğer rawUserId numerik değilse, muhtemelen bir screen_name'dir (ör. "elonmusk")
+    const isNumericId = typeof rawUserId === 'string' && /^\d+$/.test(rawUserId.trim());
+    let username = rawUsername?.trim().replace(/^@/, '');
+    if (!username && !isNumericId && rawUserId) {
+      username = rawUserId.trim().replace(/^@/, '');
+    }
+
+    const bodyParams = new URLSearchParams();
+    if (isNumericId && rawUserId) {
+      bodyParams.set('user_id', rawUserId.trim());
+    }
+    if (username) {
+      bodyParams.set('screen_name', username);
+    }
+
+    if (!bodyParams.has('user_id') && !bodyParams.has('screen_name')) {
+      throw new Error('Kullanıcı kimliği veya kullanıcı adı bulunamadı.');
+    }
+
+    try {
+      await this.xRequest('/i/api/1.1/friendships/destroy.json', {
+        method: 'POST',
+        body: bodyParams.toString(),
+      });
+      return true;
+    } catch (err: any) {
+      const msg = String(err?.message || '');
+
+      // Zaten takip edilmiyorsa veya hesap askıya alınmış/kapatılmışsa da başarılı say (amaca ulaşıldı)
+      if (
+        msg.includes('You are not following') ||
+        msg.includes('Cannot find specified user') ||
+        err?.status === 404
+      ) {
+        return true;
+      }
+
+      // Eğer numerik ID olmadan screen_name ile hata alındıysa, numerik ID'yi çözüp bir kez daha dene
+      if (!isNumericId && username) {
+        try {
+          const lookedUp = await this.lookupUsers([username]);
+          if (lookedUp.length > 0 && lookedUp[0].id && /^\d+$/.test(lookedUp[0].id)) {
+            await this.xRequest('/i/api/1.1/friendships/destroy.json', {
+              method: 'POST',
+              body: new URLSearchParams({ user_id: lookedUp[0].id }).toString(),
+            });
+            return true;
+          }
+        } catch (lookupErr: any) {
+          const lMsg = String(lookupErr?.message || '');
+          if (
+            lMsg.includes('You are not following') ||
+            lMsg.includes('Cannot find specified user') ||
+            lookupErr?.status === 404
+          ) {
+            return true;
+          }
+        }
+      }
+
+      throw err;
+    }
   }
 }
 

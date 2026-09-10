@@ -102,6 +102,7 @@ export const UserTable: React.FC<UserTableProps> = ({
   const [bulkCountdown, setBulkCountdown] = useState<number | null>(null);
   const [bulkProgressState, setBulkProgressState] = useState<{ current: number; total: number } | null>(null);
   const bulkAbortRef = useRef(false);
+  const [localProcessingUser, setLocalProcessingUser] = useState<string | null>(null);
 
   // Sorsa API State'leri
   const [sorsaLoading, setSorsaLoading] = useState(false);
@@ -1238,7 +1239,8 @@ export const UserTable: React.FC<UserTableProps> = ({
             ) : (
               paginatedUsers.map((user) => {
                 const isSelected = selectedIds.has(user.id);
-                const isProcessing = actionInProgress === user.username;
+                const isProcessing =
+                  actionInProgress === user.username || localProcessingUser === user.username;
 
                 return (
                   <tr
@@ -1317,21 +1319,31 @@ export const UserTable: React.FC<UserTableProps> = ({
                           {user.isFollowing && (
                             <button
                               onClick={async () => {
+                                const confirmMsg =
+                                  lang === 'tr'
+                                    ? `@${user.username} hesabını takipten çıkarmak istediğinize emin misiniz?`
+                                    : `Are you sure you want to unfollow @${user.username}?`;
+                                if (!window.confirm(confirmMsg)) return;
+
+                                setLocalProcessingUser(user.username);
                                 try {
-                                  if (user.id) {
-                                    await unfollowersService.unfollowUser({
-                                      id: user.id,
-                                      username: user.username,
-                                    });
-                                    await applyUnfollow(user.username);
-                                  } else if (onUnfollow) {
-                                    await onUnfollow(user.username);
-                                  }
+                                  await unfollowersService.unfollowUser({
+                                    id: user.id,
+                                    username: user.username,
+                                  });
+                                  await applyUnfollow(user.username);
                                 } catch (e: any) {
                                   console.warn(`Unfollow @${user.username} failed:`, e);
+                                  alert(
+                                    lang === 'tr'
+                                      ? `@${user.username} takipten çıkarılamadı: ${e?.message || 'Bilinmeyen hata'}`
+                                      : `Failed to unfollow @${user.username}: ${e?.message || 'Unknown error'}`
+                                  );
+                                } finally {
+                                  setLocalProcessingUser(null);
                                 }
                               }}
-                              disabled={!!actionInProgress || isBulkRunning}
+                              disabled={!!actionInProgress || isBulkRunning || isProcessing}
                               title={t.titleUnfollow}
                               className="p-1.5 text-red-500 hover:bg-red-50 rounded-md transition-colors disabled:opacity-30"
                             >

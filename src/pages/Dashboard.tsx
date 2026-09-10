@@ -532,14 +532,24 @@ const Dashboard: React.FC = () => {
   const handleUnfollow = useCallback(async (username: string): Promise<boolean> => {
     setActionInProgress(username);
     try {
-      const success = await executeProfileAction(username, 'UNFOLLOW_FROM_PROFILE');
+      const { unfollowersService } = await import('../services/unfollowers-service');
+      const success = await unfollowersService.unfollowUser({ username });
       if (success) {
-        // Listeden düş: takip etmiyorsan sil; hâlâ takipçiyse sadece isFollowing=false
         await useAppStore.getState().applyUnfollow(username);
-      } else {
-        console.warn(`@${username} takipten çıkarılamadı.`);
       }
       return success;
+    } catch (err: any) {
+      console.warn(`Unfollow @${username} failed:`, err);
+      // Fallback: profil sayfasından dene
+      try {
+        const fallbackSuccess = await executeProfileAction(username, 'UNFOLLOW_FROM_PROFILE');
+        if (fallbackSuccess) {
+          await useAppStore.getState().applyUnfollow(username);
+        }
+        return fallbackSuccess;
+      } catch {
+        return false;
+      }
     } finally {
       setActionInProgress(null);
     }
@@ -567,28 +577,32 @@ const Dashboard: React.FC = () => {
   const handleBulkUnfollow = useCallback(async (usernames: string[]) => {
     setBulkProgress({ current: 0, total: usernames.length });
     let successCount = 0;
+    const { unfollowersService } = await import('../services/unfollowers-service');
 
     for (let i = 0; i < usernames.length; i++) {
       const username = usernames[i];
       setActionInProgress(username);
       setBulkProgress({ current: i + 1, total: usernames.length });
 
-      const success = await executeProfileAction(username, 'UNFOLLOW_FROM_PROFILE');
-      if (success) {
-        successCount++;
-        await useAppStore.getState().applyUnfollow(username);
+      try {
+        const success = await unfollowersService.unfollowUser({ username });
+        if (success) {
+          successCount++;
+          await useAppStore.getState().applyUnfollow(username);
+        }
+      } catch (err) {
+        console.warn(`Bulk unfollow @${username} failed:`, err);
       }
 
-      // Rate limiting: Her işlem arasında 3 saniye bekle (X'in spam korumasına takılmamak için)
       if (i < usernames.length - 1) {
-        await wait(3000);
+        await wait(2500);
       }
     }
 
     setActionInProgress(null);
     setBulkProgress(null);
     alert(`Toplu işlem tamamlandı!\n${successCount}/${usernames.length} kullanıcı başarıyla takipten çıkarıldı.`);
-  }, [executeProfileAction]);
+  }, []);
 
   const handleBulkFollow = useCallback(async (usernames: string[]) => {
     setBulkProgress({ current: 0, total: usernames.length });
