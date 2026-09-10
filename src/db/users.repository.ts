@@ -32,6 +32,9 @@ export const userRepository = {
           id,
           isFollowing: Boolean(existing.isFollowing || user.isFollowing),
           isFollower: Boolean(existing.isFollower || user.isFollower),
+          scanOrder: typeof user.scanOrder === 'number' ? user.scanOrder : existing.scanOrder,
+          followedAt: user.followedAt ?? existing.followedAt,
+          followerSince: user.followerSince ?? existing.followerSince,
           lastSeenAt: Date.now(),
         } as XUser);
       } else {
@@ -42,8 +45,11 @@ export const userRepository = {
           displayName: user.displayName || user.username || id,
           isFollowing: Boolean(user.isFollowing),
           isFollower: Boolean(user.isFollower),
-          firstSeenAt: Date.now(),
+          firstSeenAt: user.firstSeenAt ?? Date.now(),
           lastSeenAt: Date.now(),
+          scanOrder: user.scanOrder,
+          followedAt: user.followedAt,
+          followerSince: user.followerSince,
         } as XUser);
       }
     }
@@ -142,8 +148,11 @@ export const userRepository = {
           bio: user.bio ?? existing.bio,
           isFollowing,
           isFollower,
-          firstSeenAt: existing.firstSeenAt,
+          firstSeenAt: existing.firstSeenAt || user.firstSeenAt || now,
           lastSeenAt: now,
+          scanOrder: typeof user.scanOrder === 'number' ? user.scanOrder : existing.scanOrder,
+          followedAt: user.followedAt ?? existing.followedAt,
+          followerSince: user.followerSince ?? existing.followerSince,
           followersCount:
             typeof user.followersCount === 'number'
               ? user.followersCount
@@ -170,11 +179,13 @@ export const userRepository = {
           bio: user.bio,
           isFollowing,
           isFollower,
-          firstSeenAt: now,
+          firstSeenAt: user.firstSeenAt ?? now,
           lastSeenAt: now,
+          scanOrder: user.scanOrder,
+          followedAt: user.followedAt,
+          followerSince: user.followerSince ?? (isFollower ? now : undefined),
           followersCount: user.followersCount,
           followingCount: user.followingCount,
-          ...(isFollower ? { followerSince: now } : {}),
         } as XUser);
         added++;
       }
@@ -269,6 +280,10 @@ export function mergeScanUsers(
       displayName: user.displayName || prev?.displayName || user.username || id,
       isFollowing: Boolean(prev?.isFollowing || user.isFollowing || defaults.isFollowing),
       isFollower: Boolean(prev?.isFollower || user.isFollower || defaults.isFollower),
+      scanOrder: typeof user.scanOrder === 'number' ? user.scanOrder : prev?.scanOrder,
+      followedAt: user.followedAt ?? prev?.followedAt,
+      followerSince: user.followerSince ?? prev?.followerSince,
+      firstSeenAt: user.firstSeenAt ?? prev?.firstSeenAt,
       followersCount:
         typeof user.followersCount === 'number'
           ? user.followersCount

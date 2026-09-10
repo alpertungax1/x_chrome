@@ -200,7 +200,7 @@ export const UserTable: React.FC<UserTableProps> = ({
    */
   const handleFetchFromX = async () => {
     const unknownUsers = users.filter(
-      (u) => typeof u.followersCount !== 'number' || !Number.isFinite(u.followersCount)
+      (u) => typeof u.followersCount !== 'number' || !Number.isFinite(u.followersCount) || u.followersCount <= 0
     );
     if (unknownUsers.length === 0) {
       alert(
@@ -216,7 +216,7 @@ export const UserTable: React.FC<UserTableProps> = ({
     setXFetchProgress({ current: 0, total: unknownUsers.length });
 
     try {
-      const list = unknownUsers.map((u) => u.username || u.id);
+      const list = unknownUsers.map((u) => (u.username || u.id).replace(/^@/, '').trim()).filter(Boolean);
       const results = await unfollowersService.fetchFollowerCountsDirect(list);
 
       if (results && results.length > 0) {
@@ -433,8 +433,8 @@ export const UserTable: React.FC<UserTableProps> = ({
     if (hasCountFilter) {
       list = list.filter((u) => {
         const c = u.followersCount;
-        // Takipçi filtresi seçildiğinde (ör. <50), sayısı bilinmeyen hesaplar KESİNLİKLE dahil edilmez!
-        if (typeof c !== 'number' || !Number.isFinite(c)) {
+        // Takipçi filtresi seçildiğinde (ör. <50), sayısı bilinmeyen veya 0 kalan hesaplar dahil edilmez
+        if (typeof c !== 'number' || !Number.isFinite(c) || c <= 0) {
           return false;
         }
         if (maxFollowers != null && c >= maxFollowers) return false;
@@ -445,8 +445,33 @@ export const UserTable: React.FC<UserTableProps> = ({
 
     const sorted = [...list];
     switch (sortOption) {
+      case 'newest':
+        sorted.sort((a, b) => {
+          if (typeof a.scanOrder === 'number' && typeof b.scanOrder === 'number') {
+            return a.scanOrder - b.scanOrder;
+          }
+          const timeA = a.followedAt ?? a.followerSince ?? a.firstSeenAt ?? 0;
+          const timeB = b.followedAt ?? b.followerSince ?? b.firstSeenAt ?? 0;
+          if (timeA !== timeB) return timeB - timeA;
+          const numA = Number(a.id);
+          const numB = Number(b.id);
+          if (Number.isFinite(numA) && Number.isFinite(numB)) return numB - numA;
+          return a.displayName.localeCompare(b.displayName);
+        });
+        break;
       case 'oldest':
-        sorted.reverse();
+        sorted.sort((a, b) => {
+          if (typeof a.scanOrder === 'number' && typeof b.scanOrder === 'number') {
+            return b.scanOrder - a.scanOrder;
+          }
+          const timeA = a.followedAt ?? a.followerSince ?? a.firstSeenAt ?? 0;
+          const timeB = b.followedAt ?? b.followerSince ?? b.firstSeenAt ?? 0;
+          if (timeA !== timeB) return timeA - timeB;
+          const numA = Number(a.id);
+          const numB = Number(b.id);
+          if (Number.isFinite(numA) && Number.isFinite(numB)) return numA - numB;
+          return b.displayName.localeCompare(a.displayName);
+        });
         break;
       case 'followers_desc':
         sorted.sort((a, b) => (b.followersCount ?? -1) - (a.followersCount ?? -1));
@@ -460,7 +485,6 @@ export const UserTable: React.FC<UserTableProps> = ({
       case 'name_desc':
         sorted.sort((a, b) => b.displayName.localeCompare(a.displayName));
         break;
-      case 'newest':
       default:
         break;
     }

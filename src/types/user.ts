@@ -20,6 +20,7 @@ export interface XUser {
   followerSince?: number;
 
   mutualCount?: number;
+  scanOrder?: number; // Takip/tarama sırası: 0 = En yeni, 1, 2, ... N = En eski
 }
 
 export interface RelationshipSnapshot {

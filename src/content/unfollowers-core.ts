@@ -120,22 +120,40 @@ export class XUnfollowersDirectScraper {
 
   private extractUser(raw: any): UnfollowerUser | null {
     if (!raw || typeof raw !== 'object') return null;
-    const node = raw.result && raw.result.legacy ? raw.result : raw;
+    const node = raw.result && raw.result.legacy ? raw.result : (raw.result || raw);
     if (!node || node.__typename === 'UserUnavailable') return null;
-    const legacy = node.legacy || {};
-    const core = node.core || {};
-    const rel = node.relationship_perspectives || {};
-    const id = String(node.rest_id || node.id_str || legacy.id_str || '');
-    const username = core.screen_name || legacy.screen_name || '';
+    const legacy = node.legacy || node.core?.user_results?.result?.legacy || raw.legacy || {};
+    const core = node.core || raw.core || {};
+    const rel = node.relationship_perspectives || raw.relationship_perspectives || {};
+    const id = String(node.rest_id || node.id_str || legacy.id_str || raw.rest_id || '');
+    const username = core.screen_name || legacy.screen_name || node.screen_name || '';
     if (!id || !username) return null;
     const followedBy = rel.followed_by ?? legacy.followed_by ?? null;
+    
+    // X GraphQL ve REST takipçi sayısı türevleri
+    const rawFollowers =
+      legacy.followers_count ??
+      legacy.normal_followers_count ??
+      node.followers_count ??
+      node.normal_followers_count ??
+      raw.followers_count ??
+      raw.followersCount;
+    const followers = typeof rawFollowers === 'number' ? rawFollowers : 0;
+
+    const rawFriends =
+      legacy.friends_count ??
+      node.friends_count ??
+      raw.friends_count ??
+      raw.followingCount;
+    const followingCount = typeof rawFriends === 'number' ? rawFriends : 0;
+
     return {
       id,
       username,
       name: core.name || legacy.name || username,
       avatar: node.avatar?.image_url || legacy.profile_image_url_https || '',
-      followers: legacy.followers_count || 0,
-      followingCount: legacy.friends_count || 0,
+      followers,
+      followingCount,
       followedBy: typeof followedBy === 'boolean' ? followedBy : null,
       verified: !!(node.is_blue_verified || legacy.verified),
     };
@@ -438,7 +456,8 @@ export class XUnfollowersDirectScraper {
       } catch (_) {}
     }
 
-    const mapToUser = (u: UnfollowerUser, isFollowing: boolean, isFollower: boolean | null) => ({
+    const now = Date.now();
+    const mapToUser = (u: UnfollowerUser, isFollowing: boolean, isFollower: boolean | null, orderIndex: number = 0) => ({
       id: u.username.toLowerCase(),
       username: u.username,
       displayName: u.name,
@@ -447,15 +466,18 @@ export class XUnfollowersDirectScraper {
       followingCount: typeof u.followingCount === 'number' ? u.followingCount : 0,
       isFollowing,
       isFollower: isFollower ?? false,
-      firstSeenAt: Date.now(),
-      lastSeenAt: Date.now(),
+      firstSeenAt: now - (orderIndex * 1000),
+      lastSeenAt: now,
+      followedAt: isFollowing ? (now - (orderIndex * 1000)) : undefined,
+      followerSince: isFollower ? (now - (orderIndex * 1000)) : undefined,
+      scanOrder: orderIndex,
     });
 
     // Eğer durdurulduysa veya takip edilen bulunamadıysa olanı dön
     if (this.stopFlag || followingRaw.length === 0) {
       return {
-        following: followingRaw.map((u) => mapToUser(u, true, u.followedBy)),
-        followers: followingRaw.filter((u) => u.followedBy === true).map((u) => mapToUser(u, true, true)),
+        following: followingRaw.map((u, idx) => mapToUser(u, true, u.followedBy, idx)),
+        followers: followingRaw.filter((u) => u.followedBy === true).map((u, idx) => mapToUser(u, true, true, idx)),
       };
     }
 
@@ -466,8 +488,8 @@ export class XUnfollowersDirectScraper {
 
     if (this.stopFlag) {
       return {
-        following: followingRaw.map((u) => mapToUser(u, true, u.followedBy)),
-        followers: followingRaw.filter((u) => u.followedBy === true).map((u) => mapToUser(u, true, true)),
+        following: followingRaw.map((u, idx) => mapToUser(u, true, u.followedBy, idx)),
+        followers: followingRaw.filter((u) => u.followedBy === true).map((u, idx) => mapToUser(u, true, true, idx)),
       };
     }
 
@@ -491,27 +513,67 @@ export class XUnfollowersDirectScraper {
       } catch (_) {}
     }
 
+    // Takipçi sayıları eksik veya 0 olan kullanıcıların gerçek sayılarını doğrudan X API'sinden tamamla
+    const needFollowerCounts = followingRaw.filter((u) => typeof u.followers !== 'number' || u.followers <= 0);
+    if (needFollowerCounts.length > 0 && !this.stopFlag) {
+      onStatus?.(`Takipçi sayıları tamamlanıyor... (${needFollowerCounts.length} hesap)`);
+      try {
+        const toLookup = needFollowerCounts.map((u) => u.username);
+        const lookupRes = await this.lookupUsers(toLookup);
+        if (lookupRes && lookupRes.length > 0) {
+          const map = new Map(lookupRes.map((r) => [r.username.toLowerCase(), r.followersCount]));
+          for (const u of followingRaw) {
+            const count = map.get(u.username.toLowerCase());
+            if (typeof count === 'number' && count > 0) {
+              u.followers = count;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('Auto lookup followers for followingRaw failed:', e);
+      }
+    }
+
+    const followersNeedCounts = followersRaw.filter((u) => typeof u.followers !== 'number' || u.followers <= 0);
+    if (followersNeedCounts.length > 0 && !this.stopFlag) {
+      try {
+        const toLookup = followersNeedCounts.map((u) => u.username);
+        const lookupRes = await this.lookupUsers(toLookup);
+        if (lookupRes && lookupRes.length > 0) {
+          const map = new Map(lookupRes.map((r) => [r.username.toLowerCase(), r.followersCount]));
+          for (const u of followersRaw) {
+            const count = map.get(u.username.toLowerCase());
+            if (typeof count === 'number' && count > 0) {
+              u.followers = count;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('Auto lookup followers for followersRaw failed:', e);
+      }
+    }
+
     const followingMap = new Map<string, UnfollowerUser>();
     for (const u of followingRaw) {
       followingMap.set(u.username.toLowerCase(), u);
     }
 
-    const finalFollowing = followingRaw.map((u) => mapToUser(u, true, u.followedBy));
+    const finalFollowing = followingRaw.map((u, idx) => mapToUser(u, true, u.followedBy, idx));
     
     // Followers: hem following içinde followedBy=true olanlar hem de followersRaw'dan gelenler
     const followersMap = new Map<string, any>();
-    for (const u of followingRaw) {
+    followingRaw.forEach((u, idx) => {
       if (u.followedBy === true) {
-        followersMap.set(u.username.toLowerCase(), mapToUser(u, true, true));
+        followersMap.set(u.username.toLowerCase(), mapToUser(u, true, true, idx));
       }
-    }
-    for (const u of followersRaw) {
+    });
+    followersRaw.forEach((u, idx) => {
       const uname = u.username.toLowerCase();
       if (!followersMap.has(uname)) {
         const isAlsoFollowing = followingMap.has(uname);
-        followersMap.set(uname, mapToUser(u, isAlsoFollowing, true));
+        followersMap.set(uname, mapToUser(u, isAlsoFollowing, true, idx));
       }
-    }
+    });
 
     return { following: finalFollowing, followers: Array.from(followersMap.values()) };
   }
@@ -520,11 +582,14 @@ export class XUnfollowersDirectScraper {
     usersOrScreenNames: string[]
   ): Promise<{ username: string; followersCount: number; id?: string; avatar?: string; displayName?: string }[]> {
     const results: { username: string; followersCount: number; id?: string; avatar?: string; displayName?: string }[] = [];
+    const cleaned = usersOrScreenNames
+      .map((s) => String(s || '').trim().replace(/^@/, ''))
+      .filter(Boolean);
 
     // 100'erli paketler halinde çağır
-    for (let i = 0; i < usersOrScreenNames.length; i += 100) {
+    for (let i = 0; i < cleaned.length; i += 100) {
       if (this.stopFlag) break;
-      const batch = usersOrScreenNames.slice(i, i + 100);
+      const batch = cleaned.slice(i, i + 100);
       const isNumeric = batch.every((s) => /^\d+$/.test(s));
       const paramName = isNumeric ? 'user_id' : 'screen_name';
       const paramVal = batch.join(',');
@@ -555,7 +620,7 @@ export class XUnfollowersDirectScraper {
         console.warn('users/lookup.json batch error:', err);
       }
 
-      if (i + 100 < usersOrScreenNames.length) {
+      if (i + 100 < cleaned.length) {
         await sleep(350);
       }
     }

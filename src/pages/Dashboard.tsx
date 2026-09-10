@@ -366,10 +366,10 @@ const Dashboard: React.FC = () => {
         setScanStatus('Takipçi sayıları kontrol ediliyor...');
         const allCurrentUsers = useAppStore.getState().users;
         const missingCounts = allCurrentUsers.filter(
-          (u) => typeof u.followersCount !== 'number' || !Number.isFinite(u.followersCount)
+          (u) => typeof u.followersCount !== 'number' || !Number.isFinite(u.followersCount) || u.followersCount <= 0
         );
         if (missingCounts.length > 0) {
-          const list = missingCounts.map((u) => u.username || u.id);
+          const list = missingCounts.map((u) => (u.username || u.id).replace(/^@/, '').trim()).filter(Boolean);
           const lookupResults = await unfollowersService.fetchFollowerCountsDirect(list);
           if (lookupResults && lookupResults.length > 0) {
             const map = new Map(lookupResults.map((r) => [r.username.toLowerCase(), r.followersCount]));
