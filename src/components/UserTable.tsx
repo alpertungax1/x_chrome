@@ -444,21 +444,45 @@ export const UserTable: React.FC<UserTableProps> = ({
     const sorted = [...list];
     switch (sortOption) {
       case 'newest':
-        sorted.sort((a, b) => {
-          // X API'sinde scanOrder: 0 = en yeni eklenen
-          // newest = küçük scanOrder üstte
-          const orderA = typeof a.scanOrder === 'number' ? a.scanOrder : 999999999;
-          const orderB = typeof b.scanOrder === 'number' ? b.scanOrder : 999999999;
-          if (orderA !== orderB) return orderA - orderB;
-          return a.displayName.localeCompare(b.displayName);
-        });
-        break;
       case 'oldest':
         sorted.sort((a, b) => {
-          // oldest = büyük scanOrder (veya undefined) üstte
-          const orderA = typeof a.scanOrder === 'number' ? a.scanOrder : 999999999;
-          const orderB = typeof b.scanOrder === 'number' ? b.scanOrder : 999999999;
-          if (orderA !== orderB) return orderB - orderA;
+          const hasOrderA = typeof a.scanOrder === 'number' && Number.isFinite(a.scanOrder);
+          const hasOrderB = typeof b.scanOrder === 'number' && Number.isFinite(b.scanOrder);
+
+          // 1. İkisinde de taranmış gerçek X API sırası (scanOrder) varsa:
+          // X API'sinde 0 = en son (yeni) eklenen, N = en ilk (eski) eklenen
+          if (hasOrderA && hasOrderB) {
+            if (a.scanOrder !== b.scanOrder) {
+              return sortOption === 'newest' ? a.scanOrder! - b.scanOrder! : b.scanOrder! - a.scanOrder!;
+            }
+          }
+
+          // 2. Birinde scanOrder var diğerinde yoksa:
+          // Gerçek taranmış verisi olan hesaplar her zaman önceliklidir
+          if (hasOrderA && !hasOrderB) return -1;
+          if (!hasOrderA && hasOrderB) return 1;
+
+          // 3. İkisinde de scanOrder yoksa (veya eşitse): followedAt / firstSeenAt / Snowflake ID
+          const getTime = (u: XUser): number => {
+            if (typeof u.followedAt === 'number' && u.followedAt > 0) return u.followedAt;
+            if (typeof u.firstSeenAt === 'number' && u.firstSeenAt > 0) return u.firstSeenAt;
+            if (u.numericId && /^\d+$/.test(u.numericId)) {
+              try {
+                const idBig = BigInt(u.numericId);
+                const ts = Number((idBig >> 22n) + 1288834974657n);
+                if (Number.isFinite(ts) && ts > 0) return ts;
+              } catch (_) {}
+            }
+            return 0;
+          };
+
+          const timeA = getTime(a);
+          const timeB = getTime(b);
+
+          if (timeA !== timeB) {
+            return sortOption === 'newest' ? timeB - timeA : timeA - timeB;
+          }
+
           return a.displayName.localeCompare(b.displayName);
         });
         break;
@@ -1305,14 +1329,24 @@ export const UserTable: React.FC<UserTableProps> = ({
                           <div className="font-semibold text-gray-900 truncate text-sm">
                             {user.displayName}
                           </div>
-                          <a
-                            href={`https://x.com/${user.username}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-blue-600 hover:underline text-xs"
-                          >
-                            @{user.username}
-                          </a>
+                          <div className="flex items-center gap-1.5">
+                            <a
+                              href={`https://x.com/${user.username}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-blue-600 hover:underline text-xs truncate"
+                            >
+                              @{user.username}
+                            </a>
+                            {typeof user.scanOrder === 'number' ? (
+                              <span
+                                className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 font-mono flex-shrink-0"
+                                title={`X Takip Sırası: #${user.scanOrder + 1} (Küçük = Yeni, Büyük = Eski)`}
+                              >
+                                #{user.scanOrder + 1}
+                              </span>
+                            ) : null}
+                          </div>
                         </div>
                       </div>
                     </td>
