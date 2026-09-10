@@ -1126,6 +1126,21 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
           </div>
         </div>
 
+        {/* Teşhis ve Doğrulama Bilgi Rozeti */}
+        <div className="flex items-center justify-between text-xs text-gray-500 bg-gray-50/80 px-3 py-1.5 rounded-lg border border-gray-100">
+          <div className="flex items-center gap-3">
+            <span>Filtrelenen: <strong className="text-gray-800 font-semibold">{totalFilteredCount}</strong> / {accounts.length}</span>
+            {(minFollowers !== '' || maxFollowers !== '') && (
+              <span className="text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200/60 font-medium">
+                Takipçi Filtresi Aktif ({minFollowers || 0} - {maxFollowers || '∞'})
+              </span>
+            )}
+          </div>
+          <span className="text-[11px] font-mono text-gray-400">
+            Aktif Sıra: {sortOption === 'oldest' ? '⏳ Eskiden Yeniye (İlkler Önde)' : sortOption === 'default' ? 'Varsayılan (En Sonlar Önde)' : sortOption}
+          </span>
+        </div>
+
         {/* Alt Satır: Sekmeler, Sayfa Başı Seçici ve Toplu Seçim İşlemleri */}
         <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-gray-100 text-xs">
           {/* Sekme Butonları */}
@@ -1314,15 +1329,28 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
                           </span>
                         )}
                       </div>
-                      <a
-                        href={`https://x.com/${user.username}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-xs text-gray-500 hover:text-blue-600 hover:underline flex items-center gap-1"
-                      >
-                        @{user.username}
-                        <ExternalLink size={11} className="opacity-60" />
-                      </a>
+                      <div className="flex items-center gap-1.5">
+                        <a
+                          href={`https://x.com/${user.username}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-xs text-gray-500 hover:text-blue-600 hover:underline flex items-center gap-1"
+                        >
+                          @{user.username}
+                          <ExternalLink size={11} className="opacity-60" />
+                        </a>
+                        {(() => {
+                          const origIndex = accounts.findIndex((a) => a.id === user.id);
+                          return origIndex >= 0 ? (
+                            <span
+                              className="text-[10px] px-1.5 py-0.2 rounded bg-gray-100 text-gray-500 font-mono"
+                              title={`X Takip Sırası: #${origIndex + 1} (Küçük = Yeni, Büyük = Eski)`}
+                            >
+                              #{origIndex + 1}
+                            </span>
+                          ) : null;
+                        })()}
+                      </div>
                     </div>
                   </div>
 

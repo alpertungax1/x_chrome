@@ -967,6 +967,22 @@ export const UserTable: React.FC<UserTableProps> = ({
           </div>
         </div>
 
+        {/* Teşhis ve Doğrulama Bilgi Rozeti */}
+        <div className="flex items-center justify-between text-xs text-gray-500 bg-gray-50/80 px-3 py-1.5 rounded-lg border border-gray-100 mb-3">
+          <div className="flex items-center gap-3">
+            <span>Listelenen: <strong className="text-gray-800 font-semibold">{filteredUsers.length}</strong> / {users.length}</span>
+            <span>Sırası Taranmış: <strong className="text-blue-600 font-semibold">{users.filter((u) => typeof u.scanOrder === 'number').length}</strong></span>
+            {hasCountFilter && (
+              <span className="text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200/60 font-medium">
+                Takipçi Filtresi Aktif ({minFollowers ?? 0} - {maxFollowers ?? '∞'})
+              </span>
+            )}
+          </div>
+          <span className="text-[11px] font-mono text-gray-400">
+            Aktif Sıra: {sortOption === 'oldest' ? '⏳ Eskiden Yeniye (İlkler Önde)' : sortOption === 'newest' ? '⚡ Yeniden Eskiye (Sonlar Önde)' : sortOption}
+          </span>
+        </div>
+
         {/* Hızlı filtre: N kişiden az takipçi */}
         <div className="flex flex-wrap items-center gap-2 mb-3">
           <span className="text-xs font-medium text-gray-500 mr-0.5">{t.quick}</span>
@@ -983,13 +999,6 @@ export const UserTable: React.FC<UserTableProps> = ({
                   } else {
                     setMaxFollowersInput(String(n));
                     setMinFollowersInput('');
-                    // Eğer takipçi sayısı eksik hesaplar varsa hemen X'ten otomatik tamamla
-                    const hasUnknown = users.some(
-                      (u) => typeof u.followersCount !== 'number' || !Number.isFinite(u.followersCount) || u.followersCount <= 0
-                    );
-                    if (hasUnknown && !xFetchLoading) {
-                      void handleFetchFromX();
-                    }
                   }
                 }}
                 className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
