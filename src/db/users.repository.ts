@@ -154,7 +154,7 @@ export const userRepository = {
           firstSeenAt: existing.firstSeenAt || user.firstSeenAt || now,
           lastSeenAt: now,
           scanOrder: typeof user.scanOrder === 'number' ? user.scanOrder : existing.scanOrder,
-          followedAt: user.followedAt ?? existing.followedAt,
+          followedAt: existing.followedAt ?? user.followedAt,
           followerSince: user.followerSince ?? existing.followerSince,
           followersCount:
             typeof user.followersCount === 'number'

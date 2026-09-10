@@ -445,32 +445,27 @@ export const UserTable: React.FC<UserTableProps> = ({
 
     // Kronolojik skor hesaplayıcı:
     // Skor ne kadar BÜYÜKSE o kadar YENİ, ne kadar KÜÇÜKSE o kadar ESKİ.
-    // Tüm değerler milisaniye cinsinden standart Epoch zaman damgasıdır.
     const getChronologicalScore = (u: XUser): number => {
-      // 1. followedAt zaman damgası (en yeni = en büyük timestamp)
+      // 1. followedAt: ilk ekleme anı — artık her taramada üzerine yazılmıyor
       if (typeof u.followedAt === 'number' && u.followedAt > 0) {
         return u.followedAt;
       }
-      // 2. followerSince zaman damgası
-      if (typeof u.followerSince === 'number' && u.followerSince > 0) {
-        return u.followerSince;
-      }
-      // 3. scanOrder: X API tarama sırası (0 = en son eklenen yeni, 1000 = en eski)
+      // 2. scanOrder: X API sırası (0 = en son takip edilen, N = daha eski)
+      //    Eski kayıtlarda followedAt yoksa, scanOrder en güvenilir sinyaldir.
       if (typeof u.scanOrder === 'number') {
-        const base = u.lastSeenAt || u.firstSeenAt || Date.now();
+        const base = u.firstSeenAt || Date.now();
         return base - (u.scanOrder * 60000);
       }
-      // 4. firstSeenAt zaman damgası
+      // 3. firstSeenAt: ilk veritabanına eklenme zamanı
       if (typeof u.firstSeenAt === 'number' && u.firstSeenAt > 0) {
         return u.firstSeenAt;
       }
-      // 5. numericId (Twitter Snowflake ID):
-      // Twitter Snowflake epoch: 1288834974657
+      // 4. numericId → Snowflake (hesabın açılış zamanı, takip sırası değil — son çare)
       if (u.numericId && /^\d+$/.test(u.numericId)) {
         try {
           const idBig = BigInt(u.numericId);
-          const timestamp = Number((idBig >> 22n) + 1288834974657n);
-          if (Number.isFinite(timestamp) && timestamp > 0) return timestamp;
+          const ts = Number((idBig >> 22n) + 1288834974657n);
+          if (Number.isFinite(ts) && ts > 0) return ts;
         } catch (_) {}
       }
       return 0;
