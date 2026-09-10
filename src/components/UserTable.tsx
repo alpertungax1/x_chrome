@@ -432,11 +432,9 @@ export const UserTable: React.FC<UserTableProps> = ({
 
     if (hasCountFilter) {
       list = list.filter((u) => {
-        const c = u.followersCount;
-        // Sayı tanımlı değilse veya geçersizse filtre dışı bırak
-        if (typeof c !== 'number' || !Number.isFinite(c)) {
-          return false;
-        }
+        // followersCount yoksa 0 kabul et
+        const c = (typeof u.followersCount === 'number' && Number.isFinite(u.followersCount)) ? u.followersCount : 0;
+        
         if (maxFollowers != null && c >= maxFollowers) return false;
         if (minFollowers != null && c < minFollowers) return false;
         return true;
@@ -465,10 +463,20 @@ export const UserTable: React.FC<UserTableProps> = ({
         });
         break;
       case 'followers_desc':
-        sorted.sort((a, b) => (b.followersCount ?? -1) - (a.followersCount ?? -1));
+        sorted.sort((a, b) => {
+          const cA = (typeof a.followersCount === 'number' && Number.isFinite(a.followersCount)) ? a.followersCount : 0;
+          const cB = (typeof b.followersCount === 'number' && Number.isFinite(b.followersCount)) ? b.followersCount : 0;
+          if (cA !== cB) return cB - cA; // Büyük olan üstte
+          return a.displayName.localeCompare(b.displayName);
+        });
         break;
       case 'followers_asc':
-        sorted.sort((a, b) => (a.followersCount ?? 999999999) - (b.followersCount ?? 999999999));
+        sorted.sort((a, b) => {
+          const cA = (typeof a.followersCount === 'number' && Number.isFinite(a.followersCount)) ? a.followersCount : 0;
+          const cB = (typeof b.followersCount === 'number' && Number.isFinite(b.followersCount)) ? b.followersCount : 0;
+          if (cA !== cB) return cA - cB; // Küçük olan üstte
+          return a.displayName.localeCompare(b.displayName);
+        });
         break;
       case 'name_asc':
         sorted.sort((a, b) => a.displayName.localeCompare(b.displayName));
