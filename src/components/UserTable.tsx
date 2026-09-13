@@ -272,11 +272,11 @@ export const UserTable: React.FC<UserTableProps> = ({
             : `Success! ${totalUpdated} users updated directly from X!`
         );
       } else {
-        setXFetchError(
-          lang === 'tr'
-            ? 'X API kullanıcıları döndüremedi. Lütfen açık olan x.com sekmesini yenileyip tekrar deneyin.'
-            : 'Failed to fetch users from X API.'
-        );
+        const errorMsg = lang === 'tr'
+            ? 'X API kullanıcıları döndüremedi. X bu özelliği kapatmış veya rate limite takılmış olabilirsiniz.'
+            : 'Failed to fetch users from X API. Rate limit or deprecated endpoint.';
+        setXFetchError(errorMsg);
+        alert(errorMsg);
       }
     } catch (err: any) {
       console.warn('handleFetchFromX error:', err);

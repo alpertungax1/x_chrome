@@ -729,6 +729,7 @@ export class XUnfollowersDirectScraper {
             `/i/api/1.1/users/lookup.json?${paramName}=${encodeURIComponent(paramVal)}&include_entities=1&skip_status=0&tweet_mode=extended`
           );
         }
+        
         if (Array.isArray(json)) {
           for (const u of json) {
             let lastTweetAt: number | undefined;
@@ -757,8 +758,10 @@ export class XUnfollowersDirectScraper {
             });
           }
         }
-      } catch (err) {
+      } catch (err: any) {
         console.warn('users/lookup.json batch error:', err);
+        // Eğer ilk pakette hata alırsak (ve sonuç boşsa) bunu fırlat ki dışarısı X API'nin kapandığını bilsin.
+        if (i === 0) throw err;
       }
 
       if (i + 100 < cleaned.length) {
