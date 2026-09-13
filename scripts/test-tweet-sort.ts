@@ -42,23 +42,38 @@ assert.strictEqual(twoYears?.text, '2 yıl önce');
 // 7. Sıralama Mantığı Testi
 const mockUsers = [
   { id: '1', name: 'Aktif', lastTweetAt: Date.now() - 1000 * 60 * 60 }, // 1 saat önce
-  { id: '2', name: 'Hayalet', lastTweetAt: undefined }, // Henüz taranmamış
+  { id: '2', name: 'Taranmamis', lastTweetAt: undefined }, // Henüz taranmamış
   { id: '3', name: 'Eski', lastTweetAt: Date.now() - 1000 * 60 * 60 * 24 * 500 }, // 500 gün önce
   { id: '4', name: 'Dün', lastTweetAt: Date.now() - 1000 * 60 * 60 * 24 * 1 }, // 1 gün önce
 ];
 
-// last_tweet_desc (Yeniden Eskiye): Aktif -> Dün -> Eski -> Hayalet
-const sortedDesc = [...mockUsers].sort((a, b) => (b.lastTweetAt || 0) - (a.lastTweetAt || 0));
+// last_tweet_desc (Yeniden Eskiye): Aktif -> Dün -> Eski -> Taranmamış (en altta)
+const sortedDesc = [...mockUsers].sort((a, b) => {
+  const hasA = typeof a.lastTweetAt === 'number';
+  const hasB = typeof b.lastTweetAt === 'number';
+  if (hasA && hasB) return b.lastTweetAt! - a.lastTweetAt!;
+  if (hasA && !hasB) return -1;
+  if (!hasA && hasB) return 1;
+  return 0;
+});
 assert.strictEqual(sortedDesc[0].id, '1');
 assert.strictEqual(sortedDesc[1].id, '4');
 assert.strictEqual(sortedDesc[2].id, '3');
 assert.strictEqual(sortedDesc[3].id, '2');
 
-// last_tweet_asc (İnaktifler / Hayaletler En Üstte): Hayalet -> Eski -> Dün -> Aktif
-const sortedAsc = [...mockUsers].sort((a, b) => (a.lastTweetAt || 0) - (b.lastTweetAt || 0));
-assert.strictEqual(sortedAsc[0].id, '2');
-assert.strictEqual(sortedAsc[1].id, '3');
-assert.strictEqual(sortedAsc[2].id, '4');
-assert.strictEqual(sortedAsc[3].id, '1');
+// last_tweet_asc (İnaktifler En Üstte): Eski (500 gün) -> Dün -> Aktif -> Taranmamış (en altta)
+// DİKKAT: Taranmamış hesaplar asla inaktif sanılıp en başa konulamaz, en sonda yer alır!
+const sortedAsc = [...mockUsers].sort((a, b) => {
+  const hasA = typeof a.lastTweetAt === 'number';
+  const hasB = typeof b.lastTweetAt === 'number';
+  if (hasA && hasB) return a.lastTweetAt! - b.lastTweetAt!;
+  if (hasA && !hasB) return -1;
+  if (!hasA && hasB) return 1;
+  return 0;
+});
+assert.strictEqual(sortedAsc[0].id, '3'); // Gerçek inaktif (en eski tweet atan)
+assert.strictEqual(sortedAsc[1].id, '4');
+assert.strictEqual(sortedAsc[2].id, '1');
+assert.strictEqual(sortedAsc[3].id, '2'); // Taranmamış hesap en altta
 
 console.log('✅ ALL TWEET SORT AND FORMAT TESTS PASSED SUCCESSFULLY!');

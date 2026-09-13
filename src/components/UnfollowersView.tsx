@@ -566,6 +566,54 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
     }
   };
 
+  const [isFetchingTweets, setIsFetchingTweets] = useState(false);
+  const missingTweetCount = useMemo(() => {
+    return accounts.filter((u) => typeof u.lastTweetAt !== 'number').length;
+  }, [accounts]);
+
+  const handleFetchTweetDates = async () => {
+    const targets = accounts.filter((u) => typeof u.lastTweetAt !== 'number');
+    if (targets.length === 0) return;
+
+    setIsFetchingTweets(true);
+    setStatusText(lang === 'tr' ? `Son tweet tarihleri çekiliyor... (0/${targets.length})` : `Fetching tweet dates... (0/${targets.length})`);
+    setStatusType('info');
+
+    try {
+      const usernames = targets.map((u) => u.username);
+      const results = await unfollowersService.fetchFollowerCountsDirect(usernames);
+
+      if (results && results.length > 0) {
+        const map = new Map(results.map((r) => [r.username.toLowerCase(), r]));
+        setAccounts((prev) => {
+          const next = prev.map((u) => {
+            const item = map.get(u.username.toLowerCase());
+            if (item) {
+              return {
+                ...u,
+                ...(typeof item.followersCount === 'number' && item.followersCount > 0 ? { followers: item.followersCount } : {}),
+                ...(typeof item.lastTweetAt === 'number' ? { lastTweetAt: item.lastTweetAt } : {}),
+                ...(item.lastTweetText ? { lastTweetText: item.lastTweetText } : {}),
+                ...(item.bio && !u.bio ? { bio: item.bio } : {}),
+              };
+            }
+            return u;
+          });
+          void chrome.storage.local.set({ xrm_cached_unfollowers: next });
+          return next;
+        });
+
+        setStatusText(lang === 'tr' ? `Harika! ${results.length} hesabın son tweet tarihi güncellendi.` : `Success! ${results.length} accounts updated.`);
+        setStatusType('ok');
+      }
+    } catch (e: any) {
+      setStatusText('Tweet tarihleri çekilemedi: ' + (e?.message || 'Hata'));
+      setStatusType('warn');
+    } finally {
+      setIsFetchingTweets(false);
+    }
+  };
+
   // ═══════════════════════════════════════════════════════════
   // FİLTRELEME & SIRALAMA & SAYFALAMA HESAPLAMALARI
   // ═══════════════════════════════════════════════════════════
@@ -605,12 +653,27 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
         sorted.sort((a, b) => b.name.localeCompare(a.name));
         break;
       case 'last_tweet_desc':
-        // En son gönderi atanlar en üstte (gönderisi olmayanlar en altta)
-        sorted.sort((a, b) => (b.lastTweetAt || 0) - (a.lastTweetAt || 0));
+        // En son gönderi atanlar en üstte (taranmamış olanlar en altta)
+        sorted.sort((a, b) => {
+          const hasA = typeof a.lastTweetAt === 'number';
+          const hasB = typeof b.lastTweetAt === 'number';
+          if (hasA && hasB) return b.lastTweetAt! - a.lastTweetAt!;
+          if (hasA && !hasB) return -1;
+          if (!hasA && hasB) return 1;
+          return 0;
+        });
         break;
       case 'last_tweet_asc':
-        // İnaktif / Hayalet hesaplar en üstte (hiç tweet atmamış veya en eski olanlar)
-        sorted.sort((a, b) => (a.lastTweetAt || 0) - (b.lastTweetAt || 0));
+        // İnaktif / Hayalet hesaplar en üstte (taranmış ve en eski tweet atanlar önce)
+        // Taranmamış hesaplar asla inaktif sanılamaz; daima en sonda yer alır!
+        sorted.sort((a, b) => {
+          const hasA = typeof a.lastTweetAt === 'number';
+          const hasB = typeof b.lastTweetAt === 'number';
+          if (hasA && hasB) return a.lastTweetAt! - b.lastTweetAt!;
+          if (hasA && !hasB) return -1;
+          if (!hasA && hasB) return 1;
+          return 0;
+        });
         break;
       default:
         break;
@@ -1331,6 +1394,34 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
           </div>
         </div>
       </div>
+
+      {/* İnaktifler / Son Tweet Sıralaması Seçildiğinde Rehber Bilgi */}
+      {(sortOption === 'last_tweet_asc' || sortOption === 'last_tweet_desc') && missingTweetCount > 0 && (
+        <div className="p-3.5 bg-amber-50/90 border border-amber-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs text-amber-900 shadow-xs">
+          <div className="flex items-center gap-2.5">
+            <span className="text-lg">💡</span>
+            <div>
+              <span className="font-bold">
+                {lang === 'tr' ? 'Tweet Tarihleri Henüz Çekilmedi' : 'Tweet Dates Not Fetched'}:
+              </span>{' '}
+              <span>
+                {lang === 'tr'
+                  ? `Bu listedeki ${missingTweetCount} hesabın son tweet tarihi henüz taranmamış. Hatalı işlem yapmamanız için taranmamış hesaplar en altta tutulmaktadır.`
+                  : `${missingTweetCount} accounts have not been scanned for tweet dates yet. They are kept at the bottom.`}
+              </span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleFetchTweetDates}
+            disabled={isFetchingTweets}
+            className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg whitespace-nowrap shadow-xs transition-colors flex items-center gap-1.5 self-start sm:self-center disabled:opacity-50"
+          >
+            <span>⚡</span>
+            <span>{lang === 'tr' ? `Son Tweetleri Şimdi Çek (${missingTweetCount})` : `Fetch Tweet Dates (${missingTweetCount})`}</span>
+          </button>
+        </div>
+      )}
 
       {/* ── Hesaplar Tablosu / Listesi ── */}
       <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">

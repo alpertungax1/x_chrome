@@ -567,12 +567,27 @@ export const UserTable: React.FC<UserTableProps> = ({
         sorted.sort((a, b) => b.displayName.localeCompare(a.displayName));
         break;
       case 'last_tweet_desc':
-        // En son gönderi atanlar en üstte (tarihi olmayanlar en altta)
-        sorted.sort((a, b) => (b.lastTweetAt || 0) - (a.lastTweetAt || 0));
+        // En son gönderi atanlar en üstte (taranmamış olanlar en altta)
+        sorted.sort((a, b) => {
+          const hasA = typeof a.lastTweetAt === 'number';
+          const hasB = typeof b.lastTweetAt === 'number';
+          if (hasA && hasB) return b.lastTweetAt! - a.lastTweetAt!;
+          if (hasA && !hasB) return -1;
+          if (!hasA && hasB) return 1;
+          return 0;
+        });
         break;
       case 'last_tweet_asc':
-        // İnaktif / Hayalet hesaplar en üstte (hiç tweet atmamış veya en eski atanlar)
-        sorted.sort((a, b) => (a.lastTweetAt || 0) - (b.lastTweetAt || 0));
+        // İnaktif / Hayalet hesaplar en üstte (taranmış ve en eski tweet atanlar önce)
+        // Taranmamış hesaplar asla inaktif sanılamaz; daima en sonda yer alır!
+        sorted.sort((a, b) => {
+          const hasA = typeof a.lastTweetAt === 'number';
+          const hasB = typeof b.lastTweetAt === 'number';
+          if (hasA && hasB) return a.lastTweetAt! - b.lastTweetAt!;
+          if (hasA && !hasB) return -1;
+          if (!hasA && hasB) return 1;
+          return 0;
+        });
         break;
       default:
         break;
@@ -1124,6 +1139,34 @@ export const UserTable: React.FC<UserTableProps> = ({
             Aktif Sıra: {sortOption === 'oldest' ? '⏳ Eskiden Yeniye (İlkler Önde)' : sortOption === 'newest' ? '⚡ Yeniden Eskiye (Sonlar Önde)' : sortOption === 'last_tweet_desc' ? '⚡ En Son Gönderi' : sortOption === 'last_tweet_asc' ? '💤 İnaktifler (En Eski)' : sortOption}
           </span>
         </div>
+
+        {/* İnaktifler / Son Tweet Sıralaması Seçildiğinde Rehber Bilgi */}
+        {(sortOption === 'last_tweet_asc' || sortOption === 'last_tweet_desc') && tweetStats.missing > 0 && (
+          <div className="mb-3 p-3 bg-amber-50/90 border border-amber-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs text-amber-900">
+            <div className="flex items-center gap-2">
+              <span className="text-base">💡</span>
+              <div>
+                <span className="font-bold">
+                  {lang === 'tr' ? 'Tweet Tarihleri Henüz Çekilmedi' : 'Tweet Dates Not Fetched'}:
+                </span>{' '}
+                <span>
+                  {lang === 'tr'
+                    ? `Bu listedeki ${tweetStats.missing} hesabın son tweet tarihi henüz taranmamış. Hatalı işlem yapmamanız için taranmamış hesaplar en altta tutulmaktadır.`
+                    : `${tweetStats.missing} accounts have not been scanned for tweet dates yet. They are placed at the bottom.`}
+                </span>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => void handleFetchFromX(true)}
+              disabled={xFetchLoading}
+              className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg whitespace-nowrap shadow-xs transition-colors flex items-center gap-1.5 self-start sm:self-center disabled:opacity-50"
+            >
+              <span>⚡</span>
+              <span>{lang === 'tr' ? `Son Tweetleri Şimdi Çek (${tweetStats.missing})` : `Fetch Tweet Dates (${tweetStats.missing})`}</span>
+            </button>
+          </div>
+        )}
 
         {/* Hızlı filtre: N kişiden az takipçi */}
         <div className="flex flex-wrap items-center gap-2 mb-3">
