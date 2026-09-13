@@ -19,11 +19,14 @@ import {
   Shuffle,
   StopCircle,
   ArrowUpDown,
+  Sparkles,
+  X,
 } from 'lucide-react';
 import { translations, Language } from '../i18n';
 import { useAppStore } from '../store/app-store';
 import { unfollowersService } from '../services/unfollowers-service';
 import { UnfollowersSettings, SafetyPreset } from '../types/unfollowers';
+import { matchSmartSearch, SMART_SEARCH_PRESETS, SmartSearchPreset } from '../utils/smart-search';
 
 const PAGE_SIZE = 50;
 
@@ -75,6 +78,7 @@ export const UserTable: React.FC<UserTableProps> = ({
   const [maxFollowersInput, setMaxFollowersInput] = useState('');
   const [minFollowersInput, setMinFollowersInput] = useState('');
   const [hideUnknownCounts, setHideUnknownCounts] = useState(false);
+  const [activeSmartPreset, setActiveSmartPreset] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -220,13 +224,18 @@ export const UserTable: React.FC<UserTableProps> = ({
       const results = await unfollowersService.fetchFollowerCountsDirect(list);
 
       if (results && results.length > 0) {
-        const resultMap = new Map(results.map((r) => [r.username.toLowerCase(), r.followersCount]));
-        const updates: { id: string; followersCount: number }[] = [];
+        const resultMap = new Map(results.map((r) => [r.username.toLowerCase(), r]));
+        const updates: Partial<XUser>[] = [];
 
         for (const u of unknownUsers) {
-          const count = resultMap.get(u.username.toLowerCase());
-          if (typeof count === 'number') {
-            updates.push({ id: u.id, followersCount: count });
+          const item = resultMap.get(u.username.toLowerCase());
+          if (item) {
+            updates.push({
+              id: u.id,
+              followersCount: typeof item.followersCount === 'number' ? item.followersCount : u.followersCount,
+              ...(item.bio ? { bio: item.bio } : {}),
+              ...(item.displayName ? { displayName: item.displayName } : {}),
+            });
           }
         }
 
@@ -333,18 +342,17 @@ export const UserTable: React.FC<UserTableProps> = ({
     try {
       const cached = await chrome.storage.local.get('xrm_cached_unfollowers');
       if (Array.isArray(cached.xrm_cached_unfollowers) && cached.xrm_cached_unfollowers.length > 0) {
-        const map = new Map<string, number>();
-        for (const u of cached.xrm_cached_unfollowers) {
-          if (u.username && typeof u.followers === 'number') {
-            map.set(u.username.toLowerCase(), u.followers);
-          }
-        }
+        const userMap = new Map(cached.xrm_cached_unfollowers.map((c: any) => [c.username.toLowerCase(), c]));
+        const updates: Partial<XUser>[] = [];
 
-        const updates: { id: string; followersCount: number }[] = [];
         for (const u of users) {
-          const count = map.get(u.username.toLowerCase());
-          if (typeof count === 'number' && u.followersCount !== count) {
-            updates.push({ id: u.id, followersCount: count });
+          const item = userMap.get(u.username.toLowerCase());
+          if (item && (typeof item.followers === 'number' || item.bio)) {
+            updates.push({
+              id: u.id,
+              ...(typeof item.followers === 'number' ? { followersCount: item.followers } : {}),
+              ...(item.bio ? { bio: item.bio } : {}),
+            });
           }
         }
 
@@ -378,6 +386,7 @@ export const UserTable: React.FC<UserTableProps> = ({
   const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
     setSearchQuery(value);
+    setActiveSmartPreset(null);
 
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
@@ -385,6 +394,19 @@ export const UserTable: React.FC<UserTableProps> = ({
       setCurrentPage(1);
     }, 300);
   }, []);
+
+  const handleTogglePreset = useCallback((preset: SmartSearchPreset) => {
+    if (activeSmartPreset === preset.id) {
+      setActiveSmartPreset(null);
+      setSearchQuery('');
+      setDebouncedQuery('');
+    } else {
+      setActiveSmartPreset(preset.id);
+      setSearchQuery(preset.query);
+      setDebouncedQuery(preset.query);
+    }
+    setCurrentPage(1);
+  }, [activeSmartPreset]);
 
   const usersKey = users.map((u) => u.id).join(',');
   useEffect(() => {
@@ -422,12 +444,7 @@ export const UserTable: React.FC<UserTableProps> = ({
   const filteredUsers = useMemo(() => {
     let list = users;
     if (debouncedQuery.trim()) {
-      const q = debouncedQuery.toLowerCase();
-      list = list.filter(
-        (u) =>
-          u.username.toLowerCase().includes(q) ||
-          u.displayName.toLowerCase().includes(q)
-      );
+      list = list.filter((u) => matchSmartSearch(u, debouncedQuery));
     }
 
     if (hasCountFilter) {
@@ -966,7 +983,7 @@ export const UserTable: React.FC<UserTableProps> = ({
         )}
 
         {/* Arama ve Sıralama Çubuğu */}
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 mb-3">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 mb-2">
           <div className="relative flex-1">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input
@@ -974,8 +991,23 @@ export const UserTable: React.FC<UserTableProps> = ({
               placeholder={t.searchPlaceholder}
               value={searchQuery}
               onChange={handleSearchChange}
-              className="w-full pl-9 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+              className="w-full pl-9 pr-8 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
             />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchQuery('');
+                  setDebouncedQuery('');
+                  setActiveSmartPreset(null);
+                  setCurrentPage(1);
+                }}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-0.5 rounded-full transition-colors"
+                title="Aramayı Temizle"
+              >
+                <X size={14} />
+              </button>
+            )}
           </div>
 
           <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 flex-shrink-0 shadow-2xs">
@@ -994,6 +1026,34 @@ export const UserTable: React.FC<UserTableProps> = ({
               <option value="name_desc">{t.sort?.nameDesc || '🔤 İsim (Z → A)'}</option>
             </select>
           </div>
+        </div>
+
+        {/* Akıllı Arama Kategori Çipleri (Smart Presets) */}
+        <div className="flex flex-wrap items-center gap-1.5 mb-3 text-xs">
+          <span className="text-gray-400 font-medium mr-1 flex items-center gap-1">
+            <Sparkles size={13} className="text-indigo-500" />
+            {t.smartPresetsLabel || 'Akıllı Filtreler:'}
+          </span>
+          {SMART_SEARCH_PRESETS.map((preset) => {
+            const isActive = activeSmartPreset === preset.id || searchQuery === preset.query;
+            return (
+              <button
+                key={preset.id}
+                type="button"
+                onClick={() => handleTogglePreset(preset)}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-lg font-medium transition-all ${
+                  isActive
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'bg-indigo-50/70 text-indigo-700 hover:bg-indigo-100 border border-indigo-100/80'
+                }`}
+                title={preset.query}
+              >
+                <span>{preset.icon}</span>
+                <span>{lang === 'tr' ? preset.labelTr : preset.labelEn}</span>
+                {isActive && <span className="ml-0.5 text-[10px] opacity-80">✕</span>}
+              </button>
+            );
+          })}
         </div>
 
         {/* Teşhis ve Doğrulama Bilgi Rozeti */}
@@ -1385,6 +1445,11 @@ export const UserTable: React.FC<UserTableProps> = ({
                               </span>
                             ) : null}
                           </div>
+                          {user.bio ? (
+                            <p className="text-xs text-gray-500 line-clamp-1 mt-0.5 max-w-xs sm:max-w-md" title={user.bio}>
+                              {user.bio}
+                            </p>
+                          ) : null}
                         </div>
                       </div>
                     </td>

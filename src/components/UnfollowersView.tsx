@@ -22,9 +22,11 @@ import {
   Shield,
   Coffee,
   AlertTriangle,
+  X,
 } from 'lucide-react';
 import { UnfollowerUser, UnfollowersSettings, SafetyPreset } from '../types/unfollowers';
 import { unfollowersService } from '../services/unfollowers-service';
+import { matchSmartSearch, SMART_SEARCH_PRESETS, SmartSearchPreset } from '../utils/smart-search';
 import { useAppStore } from '../store/app-store';
 import { translations, Language } from '../i18n';
 
@@ -83,6 +85,7 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
   const [minFollowers, setMinFollowers] = useState<number | ''>('');
   const [maxFollowers, setMaxFollowers] = useState<number | ''>('');
   const [activeQuickFilter, setActiveQuickFilter] = useState<string | null>(null);
+  const [activeSmartPreset, setActiveSmartPreset] = useState<string | null>(null);
 
   // Sayfalama (Pagination)
   const [currentPage, setCurrentPage] = useState<number>(1);
@@ -239,11 +242,22 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
     }
   };
 
+  const handleTogglePreset = (preset: SmartSearchPreset) => {
+    if (activeSmartPreset === preset.id) {
+      setActiveSmartPreset(null);
+      setSearchQuery('');
+    } else {
+      setActiveSmartPreset(preset.id);
+      setSearchQuery(preset.query);
+    }
+  };
+
   const clearAllFilters = () => {
     setSearchQuery('');
     setMinFollowers('');
     setMaxFollowers('');
     setActiveQuickFilter(null);
+    setActiveSmartPreset(null);
     setSortOption('default');
     setActiveTab('all');
   };
@@ -562,12 +576,7 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
       if (maxFollowers !== '' && u.followers > maxFollowers) return false;
 
       if (!searchQuery.trim()) return true;
-      const q = searchQuery.toLowerCase().trim();
-      return (
-        u.username.toLowerCase().includes(q) ||
-        u.name.toLowerCase().includes(q) ||
-        u.id.includes(q)
-      );
+      return matchSmartSearch(u, searchQuery);
     });
 
     // 2. Sıralama
@@ -1031,9 +1040,25 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
               type="text"
               placeholder={t.searchPlaceholder}
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                if (activeSmartPreset) setActiveSmartPreset(null);
+              }}
+              className="w-full pl-9 pr-8 py-2 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
             />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchQuery('');
+                  setActiveSmartPreset(null);
+                }}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-0.5 rounded-full transition-colors"
+                title="Aramayı Temizle"
+              >
+                <X size={14} />
+              </button>
+            )}
           </div>
 
           {/* Sıralama Seçici */}
@@ -1081,6 +1106,34 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
               </button>
             )}
           </div>
+        </div>
+
+        {/* Akıllı Arama Kategori Çipleri (Smart Presets) */}
+        <div className="flex flex-wrap items-center gap-1.5 pt-3 border-t border-gray-100 text-xs">
+          <span className="text-gray-400 font-medium mr-1 flex items-center gap-1">
+            <Sparkles size={13} className="text-indigo-500" />
+            {t.smartPresetsLabel || 'Akıllı Filtreler:'}
+          </span>
+          {SMART_SEARCH_PRESETS.map((preset) => {
+            const isActive = activeSmartPreset === preset.id || searchQuery === preset.query;
+            return (
+              <button
+                key={preset.id}
+                type="button"
+                onClick={() => handleTogglePreset(preset)}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-lg font-medium transition-all ${
+                  isActive
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'bg-indigo-50/70 text-indigo-700 hover:bg-indigo-100 border border-indigo-100/80'
+                }`}
+                title={preset.query}
+              >
+                <span>{preset.icon}</span>
+                <span>{lang === 'tr' ? preset.labelTr : preset.labelEn}</span>
+                {isActive && <span className="ml-0.5 text-[10px] opacity-80">✕</span>}
+              </button>
+            );
+          })}
         </div>
 
         {/* Orta Satır: Hızlı Takipçi Filtreleri ve Özel Min / Max Inputları */}
@@ -1381,6 +1434,11 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
                           ) : null;
                         })()}
                       </div>
+                      {user.bio ? (
+                        <p className="text-xs text-gray-500 line-clamp-1 mt-0.5 max-w-xs sm:max-w-md" title={user.bio}>
+                          {user.bio}
+                        </p>
+                      ) : null}
                     </div>
                   </div>
 

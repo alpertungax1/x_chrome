@@ -6,7 +6,7 @@
   const w = window as Window & {
     __XRM_META__?: Record<
       string,
-      { followersCount?: number; followingCount?: number; displayName?: string; numericId?: string }
+      { followersCount?: number; followingCount?: number; displayName?: string; bio?: string; numericId?: string }
     >;
     __XRM_HOOK__?: boolean;
     __XRM_CREDS__?: {
@@ -113,12 +113,15 @@
         if (typeof fc === 'string') fc = parseInt(fc, 10);
         if (typeof fr === 'string') fr = parseInt(fr, 10);
 
+        const bio = typeof legacy.description === 'string' ? legacy.description : undefined;
+
         const prev = w.__XRM_META__![id] || {};
         w.__XRM_META__![id] = {
           ...prev,
           ...(typeof fc === 'number' && !isNaN(fc) ? { followersCount: fc } : {}),
           ...(typeof fr === 'number' && !isNaN(fr) ? { followingCount: fr } : {}),
           ...(typeof legacy.name === 'string' ? { displayName: legacy.name } : {}),
+          ...(bio ? { bio } : {}),
           ...(parsedNumericId ? { numericId: parsedNumericId } : {}),
         };
       }
@@ -126,6 +129,7 @@
       const objFc = obj.followers_count ?? obj.followersCount;
       const objFr = obj.friends_count ?? obj.friendsCount;
       const objSn = obj.screen_name ?? obj.screenName;
+      const objBio = typeof obj.description === 'string' ? obj.description : undefined;
 
       if (typeof objSn === 'string') {
         let fc = objFc;
@@ -139,6 +143,7 @@
           ...prev,
           ...(typeof fc === 'number' && !isNaN(fc) ? { followersCount: fc } : {}),
           ...(typeof fr === 'number' && !isNaN(fr) ? { followingCount: fr } : {}),
+          ...(objBio ? { bio: objBio } : {}),
           ...(parsedNumericId ? { numericId: parsedNumericId } : {}),
         };
       }

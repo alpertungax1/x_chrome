@@ -3,6 +3,7 @@ export interface UnfollowerUser {
   username: string;
   name: string;
   avatar: string;
+  bio?: string;
   followers: number;
   followingCount: number;
   followedBy: boolean | null;

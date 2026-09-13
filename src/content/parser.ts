@@ -101,6 +101,7 @@ export const parseUserFromElement = (element: HTMLElement): Partial<XUser> | nul
       username,
       displayName: meta?.displayName || displayName,
       avatarUrl,
+      bio: meta?.bio,
       followersCount,
       followingCount,
       isFollower,

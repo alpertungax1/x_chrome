@@ -147,11 +147,21 @@ export class XUnfollowersDirectScraper {
       raw.followingCount;
     const followingCount = typeof rawFriends === 'number' ? rawFriends : 0;
 
+    const bio = String(
+      legacy.description ||
+      core.description ||
+      node.description ||
+      raw.description ||
+      raw.bio ||
+      ''
+    ).trim();
+
     return {
       id,
       username,
       name: core.name || legacy.name || username,
       avatar: node.avatar?.image_url || legacy.profile_image_url_https || '',
+      bio,
       followers,
       followingCount,
       followedBy: typeof followedBy === 'boolean' ? followedBy : null,
@@ -249,6 +259,7 @@ export class XUnfollowersDirectScraper {
           username: raw.screen_name,
           name: raw.name || raw.screen_name,
           avatar: raw.profile_image_url_https || '',
+          bio: raw.description || '',
           followers: raw.followers_count || 0,
           followingCount: raw.friends_count || 0,
           followedBy: typeof raw.followed_by === 'boolean' ? raw.followed_by : null,
@@ -463,6 +474,7 @@ export class XUnfollowersDirectScraper {
       username: u.username,
       displayName: u.name,
       avatarUrl: u.avatar,
+      bio: u.bio,
       followersCount: typeof u.followers === 'number' ? u.followers : 0,
       followingCount: typeof u.followingCount === 'number' ? u.followingCount : 0,
       isFollowing,
@@ -581,8 +593,8 @@ export class XUnfollowersDirectScraper {
 
   public async lookupUsers(
     usersOrScreenNames: string[]
-  ): Promise<{ username: string; followersCount: number; id?: string; avatar?: string; displayName?: string }[]> {
-    const results: { username: string; followersCount: number; id?: string; avatar?: string; displayName?: string }[] = [];
+  ): Promise<{ username: string; followersCount: number; id?: string; avatar?: string; displayName?: string; bio?: string }[]> {
+    const results: { username: string; followersCount: number; id?: string; avatar?: string; displayName?: string; bio?: string }[] = [];
     const cleaned = usersOrScreenNames
       .map((s) => String(s || '').trim().replace(/^@/, ''))
       .filter(Boolean);
@@ -614,6 +626,7 @@ export class XUnfollowersDirectScraper {
               displayName: u.name || u.screen_name,
               followersCount: typeof u.followers_count === 'number' ? u.followers_count : 0,
               avatar: u.profile_image_url_https || '',
+              bio: u.description || '',
             });
           }
         }

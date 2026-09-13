@@ -37,7 +37,8 @@ export const translations = {
     // UserTable
     table: {
       userCount: 'Kullanıcı',
-      searchPlaceholder: 'Kullanıcı ara...',
+      searchPlaceholder: 'Akıllı arama (örn: nft, crypto veya isim, bio)...',
+      smartPresetsLabel: 'Akıllı Filtreler:',
       quick: 'Hızlı:',
       minFollowers: 'Min. takipçi',
       maxFollowers: 'Maks. takipçi (bundan az)',
@@ -100,7 +101,8 @@ export const translations = {
       statSelected: 'Seçilen',
       statWhitelisted: 'Koruma Listesi (Yıldızlı)',
       statDaily: 'Bugün Çıkarılan',
-      searchPlaceholder: 'Kullanıcı adı veya isim ara...',
+      searchPlaceholder: 'Akıllı arama (örn: nft, web3 veya isim, bio)...',
+      smartPresetsLabel: 'Akıllı Filtreler:',
       selectAll: 'Tümünü Seç',
       selectNone: 'Seçimi Temizle',
       selectNonWhitelisted: 'Korunmayanları Seç',
@@ -206,7 +208,8 @@ export const translations = {
     // UserTable
     table: {
       userCount: 'Users',
-      searchPlaceholder: 'Search users...',
+      searchPlaceholder: 'Smart search (e.g. nft, crypto or name, bio)...',
+      smartPresetsLabel: 'Smart Filters:',
       quick: 'Quick:',
       minFollowers: 'Min. followers',
       maxFollowers: 'Max. followers (less than)',
@@ -269,7 +272,8 @@ export const translations = {
       statSelected: 'Selected',
       statWhitelisted: 'Whitelist (Starred)',
       statDaily: 'Unfollowed Today',
-      searchPlaceholder: 'Search by username or name...',
+      searchPlaceholder: 'Smart search (e.g. nft, web3 or name, bio)...',
+      smartPresetsLabel: 'Smart Filters:',
       selectAll: 'Select All',
       selectNone: 'Clear Selection',
       selectNonWhitelisted: 'Select Unprotected',
