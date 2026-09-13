@@ -6,7 +6,15 @@
   const w = window as Window & {
     __XRM_META__?: Record<
       string,
-      { followersCount?: number; followingCount?: number; displayName?: string; bio?: string; numericId?: string }
+      {
+        followersCount?: number;
+        followingCount?: number;
+        displayName?: string;
+        bio?: string;
+        numericId?: string;
+        lastTweetAt?: number;
+        lastTweetText?: string;
+      }
     >;
     __XRM_HOOK__?: boolean;
     __XRM_CREDS__?: {
@@ -114,6 +122,16 @@
         if (typeof fr === 'string') fr = parseInt(fr, 10);
 
         const bio = typeof legacy.description === 'string' ? legacy.description : undefined;
+        const rawStatus = (obj.status || legacy.status) as Record<string, unknown> | undefined;
+        let tweetAt: number | undefined;
+        let tweetText: string | undefined;
+        if (rawStatus && typeof rawStatus.created_at === 'string') {
+          const parsed = Date.parse(rawStatus.created_at);
+          if (!isNaN(parsed) && parsed > 0) tweetAt = parsed;
+          tweetText = typeof rawStatus.full_text === 'string' ? rawStatus.full_text : typeof rawStatus.text === 'string' ? rawStatus.text : undefined;
+        } else if (typeof legacy.statuses_count === 'number' && legacy.statuses_count === 0) {
+          tweetAt = 0;
+        }
 
         const prev = w.__XRM_META__![id] || {};
         w.__XRM_META__![id] = {
@@ -123,6 +141,8 @@
           ...(typeof legacy.name === 'string' ? { displayName: legacy.name } : {}),
           ...(bio ? { bio } : {}),
           ...(parsedNumericId ? { numericId: parsedNumericId } : {}),
+          ...(typeof tweetAt === 'number' ? { lastTweetAt: tweetAt } : {}),
+          ...(tweetText ? { lastTweetText: tweetText } : {}),
         };
       }
 

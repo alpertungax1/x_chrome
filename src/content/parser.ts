@@ -94,6 +94,8 @@ export const parseUserFromElement = (element: HTMLElement): Partial<XUser> | nul
     const meta = (window as any).__XRM_META__?.[username.toLowerCase()];
     const followersCount = typeof meta?.followersCount === 'number' ? meta.followersCount : undefined;
     const followingCount = typeof meta?.followingCount === 'number' ? meta.followingCount : undefined;
+    const lastTweetAt = typeof meta?.lastTweetAt === 'number' ? meta.lastTweetAt : undefined;
+    const lastTweetText = meta?.lastTweetText;
 
     return {
       id: username.toLowerCase(),
@@ -104,6 +106,8 @@ export const parseUserFromElement = (element: HTMLElement): Partial<XUser> | nul
       bio: meta?.bio,
       followersCount,
       followingCount,
+      lastTweetAt,
+      lastTweetText,
       isFollower,
       isFollowing,
       firstSeenAt: Date.now(),

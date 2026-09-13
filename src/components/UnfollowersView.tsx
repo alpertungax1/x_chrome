@@ -1446,21 +1446,18 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
                             </span>
                           ) : null;
                         })()}
-                        {user.lastTweetAt ? (() => {
+                        {typeof user.lastTweetAt === 'number' ? (() => {
                           const tweetBadge = formatLastTweetDate(user.lastTweetAt, lang);
+                          if (!tweetBadge) return null;
                           return (
                             <span
                               className={`text-[10px] px-1.5 py-0.5 rounded font-medium flex items-center gap-0.5 ${tweetBadge.colorClass}`}
-                              title={user.lastTweetText ? `Son Gönderi: "${user.lastTweetText}"` : undefined}
+                              title={user.lastTweetText ? `Son Gönderi: "${user.lastTweetText}"` : tweetBadge.tooltip}
                             >
                               {tweetBadge.badgeText}
                             </span>
                           );
-                        })() : (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-400 font-medium">
-                            {lang === 'tr' ? '⚪ Tweet Yok' : '⚪ No Tweet'}
-                          </span>
-                        )}
+                        })() : null}
                       </div>
                       {user.bio ? (
                         <p className="text-xs text-gray-500 line-clamp-1 mt-0.5 max-w-xs sm:max-w-md" title={user.bio}>

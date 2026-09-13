@@ -18,11 +18,17 @@ export interface FormattedTweetDate {
 export function formatLastTweetDate(
   timestamp?: number | null,
   lang: 'tr' | 'en' = 'tr'
-): FormattedTweetDate {
-  if (!timestamp || !Number.isFinite(timestamp) || timestamp <= 0) {
+): FormattedTweetDate | null {
+  // 1. Henüz taranmamış / bilinmeyen hesaplar için kullanıcıyı yanıltmamak adına rozet gösterme
+  if (timestamp === undefined || timestamp === null) {
+    return null;
+  }
+
+  // 2. Gerçekten hiç tweeti olmayan (veya taranıp 0 gönderi teyit edilen) hesaplar
+  if (!Number.isFinite(timestamp) || timestamp <= 0) {
     const text = lang === 'tr' ? 'Tweet Yok' : 'No Tweet';
     const icon = '⚪';
-    const badgeClass = 'bg-gray-100 text-gray-500 border border-gray-200';
+    const badgeClass = 'bg-gray-100 text-gray-400 border border-gray-200';
     return {
       text,
       icon,
@@ -30,7 +36,7 @@ export function formatLastTweetDate(
       badgeClass,
       colorClass: badgeClass,
       isInactive: true,
-      tooltip: lang === 'tr' ? 'Hesabın herkese açık gönderisi bulunamadı' : 'No public posts found for this account',
+      tooltip: lang === 'tr' ? 'Hesabın herkese açık gönderisi bulunamadı (0 Gönderi)' : 'No public posts found for this account (0 Posts)',
     };
   }
 

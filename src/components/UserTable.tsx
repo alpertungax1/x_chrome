@@ -203,67 +203,79 @@ export const UserTable: React.FC<UserTableProps> = ({
   };
 
   /**
-   * Doğrudan X API üzerinden 100'erli paketlerle ücretsiz ve anında takipçi sayılarını çeker
+   * Doğrudan X API üzerinden 100'erli paketlerle ücretsiz ve anında takipçi sayılarını ve son tweet tarihlerini çeker
    */
-  const handleFetchFromX = async () => {
-    const unknownUsers = users.filter(
-      (u) => typeof u.followersCount !== 'number' || !Number.isFinite(u.followersCount) || u.followersCount <= 0
-    );
-    if (unknownUsers.length === 0) {
+  const handleFetchFromX = async (onlyTweets: boolean = false) => {
+    const targetUsers = users.filter((u) => {
+      if (onlyTweets) {
+        return typeof u.lastTweetAt !== 'number';
+      }
+      return (
+        typeof u.followersCount !== 'number' ||
+        !Number.isFinite(u.followersCount) ||
+        u.followersCount <= 0 ||
+        typeof u.lastTweetAt !== 'number'
+      );
+    });
+
+    if (targetUsers.length === 0) {
       alert(
         lang === 'tr'
-          ? 'Tüm kullanıcıların takipçi sayıları zaten mevcut.'
-          : 'All users already have follower counts.'
+          ? 'Tüm kullanıcıların verileri (takipçi sayıları ve son tweet tarihleri) zaten güncel.'
+          : 'All users already have updated counts and tweet dates.'
       );
       return;
     }
 
     setXFetchLoading(true);
     setXFetchError('');
-    setXFetchProgress({ current: 0, total: unknownUsers.length });
+    setXFetchProgress({ current: 0, total: targetUsers.length });
 
     try {
-      const list = unknownUsers.map((u) => (u.username || u.id).replace(/^@/, '').trim()).filter(Boolean);
-      const results = await unfollowersService.fetchFollowerCountsDirect(list);
+      let totalUpdated = 0;
+      // 100'erli paketler halinde çağır ve her pakette IndexedDB'yi canlı güncelle
+      for (let i = 0; i < targetUsers.length; i += 100) {
+        const batchUsers = targetUsers.slice(i, i + 100);
+        const list = batchUsers.map((u) => (u.username || u.id).replace(/^@/, '').trim()).filter(Boolean);
+        const results = await unfollowersService.fetchFollowerCountsDirect(list);
 
-      if (results && results.length > 0) {
-        const resultMap = new Map(results.map((r) => [r.username.toLowerCase(), r]));
-        const updates: Partial<XUser>[] = [];
+        if (results && results.length > 0) {
+          const resultMap = new Map(results.map((r) => [r.username.toLowerCase(), r]));
+          const updates: Partial<XUser>[] = [];
 
-        for (const u of unknownUsers) {
-          const item = resultMap.get(u.username.toLowerCase());
-          if (item) {
-            updates.push({
-              id: u.id,
-              followersCount: typeof item.followersCount === 'number' ? item.followersCount : u.followersCount,
-              ...(item.bio ? { bio: item.bio } : {}),
-              ...(item.displayName ? { displayName: item.displayName } : {}),
-              ...(typeof item.lastTweetAt === 'number' ? { lastTweetAt: item.lastTweetAt } : {}),
-              ...(item.lastTweetText ? { lastTweetText: item.lastTweetText } : {}),
-            });
+          for (const u of batchUsers) {
+            const item = resultMap.get(u.username.toLowerCase());
+            if (item) {
+              updates.push({
+                id: u.id,
+                followersCount: typeof item.followersCount === 'number' ? item.followersCount : u.followersCount,
+                ...(item.bio ? { bio: item.bio } : {}),
+                ...(item.displayName ? { displayName: item.displayName } : {}),
+                ...(typeof item.lastTweetAt === 'number' ? { lastTweetAt: item.lastTweetAt } : {}),
+                ...(item.lastTweetText ? { lastTweetText: item.lastTweetText } : {}),
+              });
+            }
+          }
+
+          if (updates.length > 0) {
+            await updateUsersBatch(updates);
+            totalUpdated += updates.length;
+            setXFetchProgress({ current: Math.min(i + 100, targetUsers.length), total: targetUsers.length });
           }
         }
+      }
 
-        if (updates.length > 0) {
-          await updateUsersBatch(updates);
-          setXFetchProgress({ current: updates.length, total: unknownUsers.length });
-          alert(
-            lang === 'tr'
-              ? `Harika! ${updates.length} kullanıcının gerçek takipçi sayısı doğrudan X'ten çekildi ve güncellendi!`
-              : `Success! ${updates.length} users updated directly from X!`
-          );
-        } else {
-          setXFetchError(
-            lang === 'tr'
-              ? 'X API kullanıcıları döndüremedi. Lütfen açık olan x.com sekmesini yenileyip tekrar deneyin.'
-              : 'Failed to fetch users from X API.'
-          );
-        }
+      if (totalUpdated > 0) {
+        alert(
+          lang === 'tr'
+            ? `Harika! ${totalUpdated} kullanıcının son gönderi tarihi ve takipçi bilgileri güncellendi!`
+            : `Success! ${totalUpdated} users updated directly from X!`
+        );
       } else {
         setXFetchError(
           lang === 'tr'
-            ? 'X API ile bağlantı kurulamadı. Lütfen açık bir x.com sekmesi olduğundan emin olun.'
-            : 'Could not connect to X API.'
+            ? 'X API kullanıcıları döndüremedi. Lütfen açık olan x.com sekmesini yenileyip tekrar deneyin.'
+            : 'Failed to fetch users from X API.'
         );
       }
     } catch (err: any) {
@@ -453,6 +465,14 @@ export const UserTable: React.FC<UserTableProps> = ({
       if (typeof u.followersCount === 'number' && Number.isFinite(u.followersCount)) known++;
     }
     return { known, total: users.length };
+  }, [users]);
+
+  const tweetStats = useMemo(() => {
+    let known = 0;
+    for (const u of users) {
+      if (typeof u.lastTweetAt === 'number') known++;
+    }
+    return { known, total: users.length, missing: users.length - known };
   }, [users]);
 
   const hasCountFilter = maxFollowers != null || minFollowers != null;
@@ -804,15 +824,15 @@ export const UserTable: React.FC<UserTableProps> = ({
             </span>
           </div>
 
-          {/* Sağ Butonlar: Takipçi Sayısı Çekici & Anti-Ban */}
+          {/* Sağ Butonlar: Takipçi Sayısı & Tweet Tarihi Çekici & Anti-Ban */}
           <div className="flex items-center gap-2">
-            {countStats.total - countStats.known > 0 && (
+            {(countStats.total - countStats.known > 0 || tweetStats.missing > 0) && (
               <button
                 type="button"
-                onClick={handleFetchFromX}
+                onClick={() => handleFetchFromX(countStats.total - countStats.known === 0)}
                 disabled={xFetchLoading}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg bg-blue-600 hover:bg-blue-700 text-white shadow-xs transition-all disabled:opacity-50"
-                title="Açık X oturumunuzdan tüm eksik takipçi sayılarını ücretsiz çeker"
+                title="Açık X oturumunuzdan eksik takipçi sayılarını ve son tweet tarihlerini çeker"
               >
                 {xFetchLoading ? (
                   <Loader2 size={13} className="animate-spin" />
@@ -822,11 +842,15 @@ export const UserTable: React.FC<UserTableProps> = ({
                 <span>
                   {xFetchLoading
                     ? lang === 'tr'
-                      ? 'Çekiliyor...'
-                      : 'Fetching...'
+                      ? `Güncelleniyor... ${xFetchProgress ? `(${xFetchProgress.current}/${xFetchProgress.total})` : ''}`
+                      : `Updating... ${xFetchProgress ? `(${xFetchProgress.current}/${xFetchProgress.total})` : ''}`
+                    : countStats.total - countStats.known > 0
+                    ? lang === 'tr'
+                      ? `Sayıları & Tweetleri Çek (${Math.max(countStats.total - countStats.known, tweetStats.missing)})`
+                      : `Fetch Counts & Tweets (${Math.max(countStats.total - countStats.known, tweetStats.missing)})`
                     : lang === 'tr'
-                    ? `Sayıları Çek (${countStats.total - countStats.known})`
-                    : `Fetch Counts (${countStats.total - countStats.known})`}
+                    ? `⚡ Son Tweetleri Çek (${tweetStats.missing})`
+                    : `⚡ Fetch Tweet Dates (${tweetStats.missing})`}
                 </span>
               </button>
             )}
@@ -1209,6 +1233,11 @@ export const UserTable: React.FC<UserTableProps> = ({
               {countStats.known === 0 ? t.scanNoteRescan : '.'}
             </>
           )}
+          {tweetStats.total > 0 && (
+            <span className="ml-2 font-medium text-blue-600">
+              • {lang === 'tr' ? `Son Tweet Taranan: ${tweetStats.known}/${tweetStats.total}` : `Tweet Dates: ${tweetStats.known}/${tweetStats.total}`}
+            </span>
+          )}
         </p>
       </div>
 
@@ -1239,7 +1268,7 @@ export const UserTable: React.FC<UserTableProps> = ({
             <div className="flex flex-wrap items-center gap-2 self-end sm:self-center flex-shrink-0">
               <button
                 type="button"
-                onClick={handleFetchFromX}
+                onClick={() => void handleFetchFromX(false)}
                 disabled={xFetchLoading}
                 className="text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white px-3.5 py-1.5 rounded-lg shadow-sm transition-all whitespace-nowrap flex items-center gap-1.5 disabled:opacity-50"
                 title="Açık X oturumunuzdan tüm eksik takipçi sayılarını ücretsiz ve anında çeker"
@@ -1473,21 +1502,18 @@ export const UserTable: React.FC<UserTableProps> = ({
                                 #{user.scanOrder + 1}
                               </span>
                             ) : null}
-                            {user.lastTweetAt ? (() => {
+                            {typeof user.lastTweetAt === 'number' ? (() => {
                               const tweetBadge = formatLastTweetDate(user.lastTweetAt, lang);
+                              if (!tweetBadge) return null;
                               return (
                                 <span
                                   className={`text-[10px] px-1.5 py-0.5 rounded font-medium flex-shrink-0 ${tweetBadge.colorClass}`}
-                                  title={user.lastTweetText ? `Son Gönderi: "${user.lastTweetText}"` : undefined}
+                                  title={user.lastTweetText ? `Son Gönderi: "${user.lastTweetText}"` : tweetBadge.tooltip}
                                 >
                                   {tweetBadge.badgeText}
                                 </span>
                               );
-                            })() : (
-                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-400 font-medium flex-shrink-0">
-                                {lang === 'tr' ? '⚪ Tweet Yok' : '⚪ No Tweet'}
-                              </span>
-                            )}
+                            })() : null}
                           </div>
                           {user.bio ? (
                             <p className="text-xs text-gray-500 line-clamp-1 mt-0.5 max-w-xs sm:max-w-md" title={user.bio}>

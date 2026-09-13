@@ -711,14 +711,21 @@ export class XUnfollowersDirectScraper {
       const paramVal = batch.join(',');
 
       try {
+        const postBody = new URLSearchParams({
+          [paramName]: paramVal,
+          include_entities: '1',
+          skip_status: '0',
+          tweet_mode: 'extended',
+        }).toString();
+
         let json = await this.xRequest('/i/api/1.1/users/lookup.json', {
           method: 'POST',
-          body: new URLSearchParams({ [paramName]: paramVal }).toString(),
+          body: postBody,
         });
         if (!Array.isArray(json)) {
           // Fallback GET
           json = await this.xRequest(
-            `/i/api/1.1/users/lookup.json?${paramName}=${encodeURIComponent(paramVal)}&include_entities=false`
+            `/i/api/1.1/users/lookup.json?${paramName}=${encodeURIComponent(paramVal)}&include_entities=1&skip_status=0&tweet_mode=extended`
           );
         }
         if (Array.isArray(json)) {
@@ -730,9 +737,11 @@ export class XUnfollowersDirectScraper {
                 const parsed = Date.parse(u.status.created_at);
                 if (!isNaN(parsed) && parsed > 0) lastTweetAt = parsed;
               }
-              if (u.status.text || u.status.full_text) {
+              if (u.status.full_text || u.status.text) {
                 lastTweetText = u.status.full_text || u.status.text;
               }
+            } else if (typeof u.statuses_count === 'number' && u.statuses_count === 0) {
+              lastTweetAt = 0;
             }
 
             results.push({
