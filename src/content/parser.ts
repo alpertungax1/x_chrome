@@ -97,6 +97,7 @@ export const parseUserFromElement = (element: HTMLElement): Partial<XUser> | nul
 
     return {
       id: username.toLowerCase(),
+      numericId: meta?.numericId,
       username,
       displayName: meta?.displayName || displayName,
       avatarUrl,

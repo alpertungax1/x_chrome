@@ -629,28 +629,58 @@ export class XUnfollowersDirectScraper {
     return results;
   }
 
+  public async resolveUserNumericId(username: string): Promise<string | null> {
+    const clean = username.trim().replace(/^@/, '');
+    if (!clean) return null;
+
+    // 1. users/show.json ile sorgula (hızlı ve tekil)
+    try {
+      const userRes = await this.xRequest(`/i/api/1.1/users/show.json?screen_name=${encodeURIComponent(clean)}`);
+      const id = String(userRes?.id_str || userRes?.id || '');
+      if (/^\d+$/.test(id)) return id;
+    } catch (_) {}
+
+    // 2. lookupUsers ile sorgula
+    try {
+      const lookup = await this.lookupUsers([clean]);
+      if (lookup.length > 0 && lookup[0].id && /^\d+$/.test(lookup[0].id)) {
+        return lookup[0].id;
+      }
+    } catch (_) {}
+
+    return null;
+  }
+
   public async unfollowUser(
-    target: { userId?: string; username?: string } | string
+    target: { userId?: string; username?: string; numericId?: string } | string
   ): Promise<boolean> {
-    let rawUserId = typeof target === 'string' ? target : target.userId;
+    let rawUserId = typeof target === 'string' ? target : (target.numericId || target.userId);
     let rawUsername = typeof target === 'string' ? undefined : target.username;
 
-    // Eğer rawUserId numerik değilse, muhtemelen bir screen_name'dir (ör. "elonmusk")
-    const isNumericId = typeof rawUserId === 'string' && /^\d+$/.test(rawUserId.trim());
+    let isNumericId = typeof rawUserId === 'string' && /^\d+$/.test(rawUserId.trim());
+    let numericId = isNumericId ? rawUserId!.trim() : undefined;
+
     let username = rawUsername?.trim().replace(/^@/, '');
     if (!username && !isNumericId && rawUserId) {
       username = rawUserId.trim().replace(/^@/, '');
     }
 
-    const bodyParams = new URLSearchParams();
-    if (isNumericId && rawUserId) {
-      bodyParams.set('user_id', rawUserId.trim());
-    }
-    if (username) {
-      bodyParams.set('screen_name', username);
+    // Eğer numerik ID henüz elimizde yoksa, username üzerinden X API'sinden numerik ID'yi çöz
+    if (!numericId && username) {
+      const resolved = await this.resolveUserNumericId(username);
+      if (resolved) {
+        numericId = resolved;
+        isNumericId = true;
+      }
     }
 
-    if (!bodyParams.has('user_id') && !bodyParams.has('screen_name')) {
+    const bodyParams = new URLSearchParams();
+    if (numericId) {
+      // X Web API takipten çıkarken SADECE user_id gönderir; screen_name eklenmez
+      bodyParams.set('user_id', numericId);
+    } else if (username) {
+      bodyParams.set('screen_name', username);
+    } else {
       throw new Error('Kullanıcı kimliği veya kullanıcı adı bulunamadı.');
     }
 
@@ -663,35 +693,31 @@ export class XUnfollowersDirectScraper {
     } catch (err: any) {
       const msg = String(err?.message || '');
 
-      // Zaten takip edilmiyorsa veya hesap askıya alınmış/kapatılmışsa da başarılı say (amaca ulaşıldı)
+      // Zaten takip edilmiyorsa amaca ulaşıldı, başarılı say
       if (
         msg.includes('You are not following') ||
-        msg.includes('Cannot find specified user') ||
-        err?.status === 404
+        msg.includes('already not following')
       ) {
         return true;
       }
 
-      // Eğer numerik ID olmadan screen_name ile hata alındıysa, numerik ID'yi çözüp bir kez daha dene
-      if (!isNumericId && username) {
+      // Eğer numerik ID olmadan screen_name ile çağrıldıysa ve hata alındıysa, numerik ID çözüp tekrar dene
+      if (!numericId && username) {
         try {
-          const lookedUp = await this.lookupUsers([username]);
-          if (lookedUp.length > 0 && lookedUp[0].id && /^\d+$/.test(lookedUp[0].id)) {
+          const resolved = await this.resolveUserNumericId(username);
+          if (resolved) {
             await this.xRequest('/i/api/1.1/friendships/destroy.json', {
               method: 'POST',
-              body: new URLSearchParams({ user_id: lookedUp[0].id }).toString(),
+              body: new URLSearchParams({ user_id: resolved }).toString(),
             });
             return true;
           }
-        } catch (lookupErr: any) {
-          const lMsg = String(lookupErr?.message || '');
-          if (
-            lMsg.includes('You are not following') ||
-            lMsg.includes('Cannot find specified user') ||
-            lookupErr?.status === 404
-          ) {
+        } catch (retryErr: any) {
+          const rMsg = String(retryErr?.message || '');
+          if (rMsg.includes('You are not following') || rMsg.includes('already not following')) {
             return true;
           }
+          throw retryErr;
         }
       }
 

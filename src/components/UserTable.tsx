@@ -611,7 +611,11 @@ export const UserTable: React.FC<UserTableProps> = ({
 
         try {
           // Doğrudan API ile takipten çıkar (Sekme açıp kapatmaz, çok daha hızlı ve stabildir)
-          await unfollowersService.unfollowUser({ id: user.id, username: user.username });
+          await unfollowersService.unfollowUser({
+            id: user.id,
+            username: user.username,
+            numericId: user.numericId,
+          });
           done++;
           batchConsecutive++;
 
@@ -1405,6 +1409,7 @@ export const UserTable: React.FC<UserTableProps> = ({
                                   await unfollowersService.unfollowUser({
                                     id: user.id,
                                     username: user.username,
+                                    numericId: user.numericId,
                                   });
                                   await applyUnfollow(user.username);
                                 } catch (e: any) {

@@ -533,7 +533,15 @@ const Dashboard: React.FC = () => {
     setActionInProgress(username);
     try {
       const { unfollowersService } = await import('../services/unfollowers-service');
-      const success = await unfollowersService.unfollowUser({ username });
+      const cleanName = username.trim().replace(/^@/, '').toLowerCase();
+      const existingUser = useAppStore.getState().users.find(
+        (u) => u.username.toLowerCase() === cleanName || u.id === cleanName
+      );
+      const success = await unfollowersService.unfollowUser({
+        username,
+        id: existingUser?.id,
+        numericId: existingUser?.numericId,
+      });
       if (success) {
         await useAppStore.getState().applyUnfollow(username);
       }
@@ -578,6 +586,7 @@ const Dashboard: React.FC = () => {
     setBulkProgress({ current: 0, total: usernames.length });
     let successCount = 0;
     const { unfollowersService } = await import('../services/unfollowers-service');
+    const storeUsers = useAppStore.getState().users;
 
     for (let i = 0; i < usernames.length; i++) {
       const username = usernames[i];
@@ -585,7 +594,15 @@ const Dashboard: React.FC = () => {
       setBulkProgress({ current: i + 1, total: usernames.length });
 
       try {
-        const success = await unfollowersService.unfollowUser({ username });
+        const cleanName = username.trim().replace(/^@/, '').toLowerCase();
+        const existingUser = storeUsers.find(
+          (u) => u.username.toLowerCase() === cleanName || u.id === cleanName
+        );
+        const success = await unfollowersService.unfollowUser({
+          username,
+          id: existingUser?.id,
+          numericId: existingUser?.numericId,
+        });
         if (success) {
           successCount++;
           await useAppStore.getState().applyUnfollow(username);

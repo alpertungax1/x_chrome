@@ -351,15 +351,17 @@ export class UnfollowersService {
     }
   }
 
-  public async unfollowUser(user: { id?: string; username: string }): Promise<boolean> {
+  public async unfollowUser(user: { id?: string; username: string; numericId?: string }): Promise<boolean> {
     const tabId = await this.ensureXSession();
+    const resolvedUserId = user.numericId || (/^\d+$/.test(user.id || '') ? user.id : undefined);
     const response: any = await new Promise((resolve, reject) => {
       chrome.tabs.sendMessage(
         tabId,
         {
           type: 'UNFOLLOW_USER_DIRECT',
           payload: {
-            userId: user.id,
+            userId: resolvedUserId || user.id,
+            numericId: user.numericId,
             username: user.username,
           },
         },

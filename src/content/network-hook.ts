@@ -6,7 +6,7 @@
   const w = window as Window & {
     __XRM_META__?: Record<
       string,
-      { followersCount?: number; followingCount?: number; displayName?: string }
+      { followersCount?: number; followingCount?: number; displayName?: string; numericId?: string }
     >;
     __XRM_HOOK__?: boolean;
     __XRM_CREDS__?: {
@@ -102,6 +102,9 @@
         return;
       }
       const obj = node as Record<string, unknown>;
+      const rawRestId = String(obj.rest_id || obj.id_str || (obj.legacy as Record<string, unknown> | undefined)?.id_str || '');
+      const parsedNumericId = /^\d+$/.test(rawRestId) ? rawRestId : undefined;
+
       const legacy = obj.legacy as Record<string, unknown> | undefined;
       if (legacy && (typeof legacy.screen_name === 'string' || typeof legacy.screenName === 'string')) {
         const id = String(legacy.screen_name || legacy.screenName).toLowerCase();
@@ -110,15 +113,14 @@
         if (typeof fc === 'string') fc = parseInt(fc, 10);
         if (typeof fr === 'string') fr = parseInt(fr, 10);
 
-        if (typeof fc === 'number' || typeof fr === 'number') {
-          const prev = w.__XRM_META__![id] || {};
-          w.__XRM_META__![id] = {
-            ...prev,
-            ...(typeof fc === 'number' && !isNaN(fc) ? { followersCount: fc } : {}),
-            ...(typeof fr === 'number' && !isNaN(fr) ? { followingCount: fr } : {}),
-            ...(typeof legacy.name === 'string' ? { displayName: legacy.name } : {}),
-          };
-        }
+        const prev = w.__XRM_META__![id] || {};
+        w.__XRM_META__![id] = {
+          ...prev,
+          ...(typeof fc === 'number' && !isNaN(fc) ? { followersCount: fc } : {}),
+          ...(typeof fr === 'number' && !isNaN(fr) ? { followingCount: fr } : {}),
+          ...(typeof legacy.name === 'string' ? { displayName: legacy.name } : {}),
+          ...(parsedNumericId ? { numericId: parsedNumericId } : {}),
+        };
       }
 
       const objFc = obj.followers_count ?? obj.followersCount;
@@ -131,15 +133,14 @@
         if (typeof fc === 'string') fc = parseInt(fc, 10);
         if (typeof fr === 'string') fr = parseInt(fr, 10);
 
-        if (typeof fc === 'number' && !isNaN(fc)) {
-          const id = String(objSn).toLowerCase();
-          const prev = w.__XRM_META__![id] || {};
-          w.__XRM_META__![id] = {
-            ...prev,
-            followersCount: fc,
-            ...(typeof fr === 'number' && !isNaN(fr) ? { followingCount: fr } : {}),
-          };
-        }
+        const id = String(objSn).toLowerCase();
+        const prev = w.__XRM_META__![id] || {};
+        w.__XRM_META__![id] = {
+          ...prev,
+          ...(typeof fc === 'number' && !isNaN(fc) ? { followersCount: fc } : {}),
+          ...(typeof fr === 'number' && !isNaN(fr) ? { followingCount: fr } : {}),
+          ...(parsedNumericId ? { numericId: parsedNumericId } : {}),
+        };
       }
       for (const key of Object.keys(obj)) {
         if (key === 'profile_image_url_https' || key === 'description') continue;
