@@ -413,12 +413,17 @@ export class UnfollowersService {
    * Anti-Ban & Doğal İnsan Davranışı Simülasyonlu Rastgele Süre Hesaplayıcı
    */
   public calculateDelayMs(
-    minSeconds: number,
-    maxSeconds: number,
+    minSeconds?: number,
+    maxSeconds?: number,
     jitter: boolean = true
   ): number {
-    const min = Math.max(3, Math.min(minSeconds, maxSeconds));
-    const max = Math.max(min, maxSeconds);
+    const rawMin = Number(minSeconds);
+    const rawMax = Number(maxSeconds);
+    const validMin = (!isNaN(rawMin) && rawMin > 0) ? rawMin : 20;
+    const validMax = (!isNaN(rawMax) && rawMax >= validMin) ? rawMax : Math.max(validMin + 10, 45);
+
+    const min = Math.max(5, Math.min(validMin, validMax));
+    const max = Math.max(min, validMax);
 
     // Uniform random in range [min, max]
     let chosenSec = min + Math.random() * (max - min);
@@ -429,7 +434,7 @@ export class UnfollowersService {
       chosenSec = chosenSec * jitterFactor;
     }
 
-    return Math.round(Math.max(3000, chosenSec * 1000));
+    return Math.round(Math.max(5000, chosenSec * 1000));
   }
 }
 

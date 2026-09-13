@@ -367,12 +367,31 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
     let batchConsecutiveCount = 0;
 
     try {
+      // En güncel ayarları doğrudan storage'dan çek
+      const currentSettings = await unfollowersService.getSettings();
+      setSettings(currentSettings);
+
+      // Doğal Anti-Ban Hazırlık Molası (3 sn)
+      setStatusText(
+        lang === 'tr'
+          ? `🛡️ Anti-Ban koruması aktif (${currentSettings.minDelaySeconds}-${currentSettings.maxDelaySeconds}s). Güvenli oturum hazırlanıyor...`
+          : `🛡️ Anti-Ban active (${currentSettings.minDelaySeconds}-${currentSettings.maxDelaySeconds}s). Preparing safe session...`
+      );
+      const initEnd = Date.now() + 3000;
+      while (Date.now() < initEnd) {
+        if (unfollowAbortRef.current) break;
+        const remainingSec = Math.max(1, Math.ceil((initEnd - Date.now()) / 1000));
+        setCountdown(remainingSec);
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      setCountdown(null);
+
       for (let i = 0; i < targets.length; i++) {
         if (unfollowAbortRef.current) break;
 
         // Günlük limit kontrolü
-        if (settings.dailyLimit > 0 && settings.dailyCount + done >= settings.dailyLimit) {
-          setStatusText(t.dailyLimitReached(settings.dailyLimit));
+        if (currentSettings.dailyLimit > 0 && currentSettings.dailyCount + done >= currentSettings.dailyLimit) {
+          setStatusText(t.dailyLimitReached(currentSettings.dailyLimit));
           setStatusType('warn');
           break;
         }
@@ -414,21 +433,21 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
             continue;
           }
 
-          setStatusText(`@${user.username} çıkarılamadı: ${err?.message || 'Hata'}`);
+          setStatusText(`@${user.username} çıkarılamadı (${err?.message || 'Hata'}). Güvenli süre bekleniyor...`);
           setStatusType('warn');
-          await new Promise((r) => setTimeout(r, 1500));
+          await new Promise((r) => setTimeout(r, 3000));
         }
 
         if (i < targets.length - 1 && !unfollowAbortRef.current) {
           // 1. Periyodik Dinlenme Molası (Anti-Bot Rest Period)
           if (
-            settings.enableBatchCooldown &&
-            settings.batchSize > 0 &&
-            batchConsecutiveCount >= settings.batchSize
+            currentSettings.enableBatchCooldown &&
+            currentSettings.batchSize > 0 &&
+            batchConsecutiveCount >= currentSettings.batchSize
           ) {
             batchConsecutiveCount = 0;
             setIsResting(true);
-            const cooldownEndTime = Date.now() + settings.cooldownSeconds * 1000;
+            const cooldownEndTime = Date.now() + currentSettings.cooldownSeconds * 1000;
 
             while (Date.now() < cooldownEndTime) {
               if (unfollowAbortRef.current) break;
@@ -445,13 +464,18 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
 
           // 2. Rastgele İnsansı Aralık (Dynamic Jittered Delay)
           const delayMs = unfollowersService.calculateDelayMs(
-            settings.minDelaySeconds,
-            settings.maxDelaySeconds,
-            settings.jitter
+            currentSettings.minDelaySeconds,
+            currentSettings.maxDelaySeconds,
+            currentSettings.jitter
           );
-          const delaySec = Math.round(delayMs / 1000);
-          setCurrentDelayRangeText(`${settings.minDelaySeconds}-${settings.maxDelaySeconds}s`);
+          setCurrentDelayRangeText(`${currentSettings.minDelaySeconds}-${currentSettings.maxDelaySeconds}s`);
           const endTime = Date.now() + delayMs;
+
+          setStatusText(
+            lang === 'tr'
+              ? `🛡️ @${user.username} takipten çıkarıldı. Anti-Ban: Sonraki hesap için bekleniyor...`
+              : `🛡️ Unfollowed @${user.username}. Anti-Ban: Waiting for next account...`
+          );
 
           while (Date.now() < endTime) {
             if (unfollowAbortRef.current) break;
@@ -499,6 +523,9 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
     if (!window.confirm(confirmMsg)) return;
 
     try {
+      // Doğal insan ritmi / Anti-Ban mikro beklemesi (1.2 sn)
+      setStatusText(lang === 'tr' ? `🛡️ @${user.username} güvenle takipten çıkarılıyor...` : `🛡️ Safely unfollowing @${user.username}...`);
+      await new Promise((r) => setTimeout(r, 1200));
       await unfollowersService.unfollowUser(user);
       await unfollowersService.incrementDailyCount();
       setSettings((prev) => ({ ...prev, dailyCount: prev.dailyCount + 1 }));

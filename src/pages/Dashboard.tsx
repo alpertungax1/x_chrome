@@ -587,6 +587,10 @@ const Dashboard: React.FC = () => {
     let successCount = 0;
     const { unfollowersService } = await import('../services/unfollowers-service');
     const storeUsers = useAppStore.getState().users;
+    const settings = await unfollowersService.getSettings();
+
+    // Anti-Ban güvenli başlangıç hazırlığı (3 sn)
+    await wait(3000);
 
     for (let i = 0; i < usernames.length; i++) {
       const username = usernames[i];
@@ -612,7 +616,12 @@ const Dashboard: React.FC = () => {
       }
 
       if (i < usernames.length - 1) {
-        await wait(2500);
+        const delayMs = unfollowersService.calculateDelayMs(
+          settings.minDelaySeconds,
+          settings.maxDelaySeconds,
+          settings.jitter
+        );
+        await wait(delayMs);
       }
     }
 

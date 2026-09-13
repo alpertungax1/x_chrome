@@ -596,12 +596,31 @@ export const UserTable: React.FC<UserTableProps> = ({
     let batchConsecutive = 0;
 
     try {
+      // En güncel Anti-Ban ayarlarını doğrudan storage'dan çek
+      const currentSettings = await unfollowersService.getSettings();
+      setSettings(currentSettings);
+
+      // Doğal Anti-Ban Hazırlık Molası (Kullanıcının ve sistemin güvenli başlaması için 3 sn)
+      setBulkStatusText(
+        lang === 'tr'
+          ? `🛡️ Anti-Ban koruması aktif (${currentSettings.minDelaySeconds}-${currentSettings.maxDelaySeconds}s). Güvenli oturum hazırlanıyor...`
+          : `🛡️ Anti-Ban active (${currentSettings.minDelaySeconds}-${currentSettings.maxDelaySeconds}s). Preparing safe session...`
+      );
+      const initEnd = Date.now() + 3000;
+      while (Date.now() < initEnd) {
+        if (bulkAbortRef.current) break;
+        const rem = Math.max(1, Math.ceil((initEnd - Date.now()) / 1000));
+        setBulkCountdown(rem);
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      setBulkCountdown(null);
+
       for (let i = 0; i < selectedFollowing.length; i++) {
         if (bulkAbortRef.current) break;
 
         // Günlük limit kontrolü
-        if (settings.dailyLimit > 0 && settings.dailyCount + done >= settings.dailyLimit) {
-          setBulkStatusText(ut.dailyLimitReached(settings.dailyLimit));
+        if (currentSettings.dailyLimit > 0 && currentSettings.dailyCount + done >= currentSettings.dailyLimit) {
+          setBulkStatusText(ut.dailyLimitReached(currentSettings.dailyLimit));
           break;
         }
 
@@ -640,22 +659,20 @@ export const UserTable: React.FC<UserTableProps> = ({
             continue;
           }
 
-          // Hata durumunda (hesap silinmiş, askıya alınmış vb.) ASLA pencere veya alert açma
-          // Durumu loglayıp otomatik olarak sıradaki hesaba devam et
-          setBulkStatusText(`@${user.username} atlandı, diğerine geçiliyor...`);
-          await new Promise((r) => setTimeout(r, 600));
+          setBulkStatusText(`@${user.username} çıkarılamadı (${err?.message || 'Hata'}). Güvenli süre bekleniyor...`);
+          await new Promise((r) => setTimeout(r, 3000));
         }
 
         if (i < selectedFollowing.length - 1 && !bulkAbortRef.current) {
           // 1. Dinlenme Molası (Anti-Bot Rest Cooldown)
           if (
-            settings.enableBatchCooldown &&
-            settings.batchSize > 0 &&
-            batchConsecutive >= settings.batchSize
+            currentSettings.enableBatchCooldown &&
+            currentSettings.batchSize > 0 &&
+            batchConsecutive >= currentSettings.batchSize
           ) {
             batchConsecutive = 0;
             setIsResting(true);
-            const cooldownEndTime = Date.now() + settings.cooldownSeconds * 1000;
+            const cooldownEndTime = Date.now() + currentSettings.cooldownSeconds * 1000;
 
             while (Date.now() < cooldownEndTime) {
               if (bulkAbortRef.current) break;
@@ -671,11 +688,17 @@ export const UserTable: React.FC<UserTableProps> = ({
 
           // 2. Rastgele İnsansı Aralık (Dynamic Jittered Delay)
           const delayMs = unfollowersService.calculateDelayMs(
-            settings.minDelaySeconds,
-            settings.maxDelaySeconds,
-            settings.jitter
+            currentSettings.minDelaySeconds,
+            currentSettings.maxDelaySeconds,
+            currentSettings.jitter
           );
           const endTime = Date.now() + delayMs;
+
+          setBulkStatusText(
+            lang === 'tr'
+              ? `🛡️ @${user.username} takipten çıkarıldı. Anti-Ban: Sonraki hesap için bekleniyor...`
+              : `🛡️ Unfollowed @${user.username}. Anti-Ban: Waiting for next account...`
+          );
 
           while (Date.now() < endTime) {
             if (bulkAbortRef.current) break;
@@ -1406,6 +1429,8 @@ export const UserTable: React.FC<UserTableProps> = ({
 
                                 setLocalProcessingUser(user.username);
                                 try {
+                                  // Doğal insan ritmi / Anti-Ban mikro beklemesi (1.2 sn)
+                                  await new Promise((r) => setTimeout(r, 1200));
                                   await unfollowersService.unfollowUser({
                                     id: user.id,
                                     username: user.username,
