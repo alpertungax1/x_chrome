@@ -156,6 +156,19 @@ export class XUnfollowersDirectScraper {
       ''
     ).trim();
 
+    const rawStatus = raw.status || node.status || legacy.status;
+    let lastTweetAt: number | undefined;
+    let lastTweetText: string | undefined;
+    if (rawStatus) {
+      if (rawStatus.created_at) {
+        const parsed = Date.parse(rawStatus.created_at);
+        if (!isNaN(parsed) && parsed > 0) lastTweetAt = parsed;
+      }
+      if (typeof rawStatus.text === 'string' || typeof rawStatus.full_text === 'string') {
+        lastTweetText = rawStatus.full_text || rawStatus.text;
+      }
+    }
+
     return {
       id,
       username,
@@ -166,6 +179,8 @@ export class XUnfollowersDirectScraper {
       followingCount,
       followedBy: typeof followedBy === 'boolean' ? followedBy : null,
       verified: !!(node.is_blue_verified || legacy.verified),
+      lastTweetAt,
+      lastTweetText,
     };
   }
 
@@ -250,10 +265,22 @@ export class XUnfollowersDirectScraper {
     while (!this.stopFlag && cursor && cursor !== '0') {
       pages += 1;
       const json = await this.xRequest(
-        `/i/api/1.1/friends/list.json?count=200&cursor=${encodeURIComponent(cursor)}&skip_status=true&include_user_entities=false`
+        `/i/api/1.1/friends/list.json?count=200&cursor=${encodeURIComponent(cursor)}&skip_status=false&include_user_entities=false`
       );
       const users = Array.isArray(json?.users) ? json.users : [];
       for (const raw of users) {
+        let lastTweetAt: number | undefined;
+        let lastTweetText: string | undefined;
+        if (raw.status) {
+          if (raw.status.created_at) {
+            const parsed = Date.parse(raw.status.created_at);
+            if (!isNaN(parsed) && parsed > 0) lastTweetAt = parsed;
+          }
+          if (raw.status.text || raw.status.full_text) {
+            lastTweetText = raw.status.full_text || raw.status.text;
+          }
+        }
+
         const u: UnfollowerUser = {
           id: String(raw.id_str || raw.id),
           username: raw.screen_name,
@@ -264,6 +291,8 @@ export class XUnfollowersDirectScraper {
           followingCount: raw.friends_count || 0,
           followedBy: typeof raw.followed_by === 'boolean' ? raw.followed_by : null,
           verified: !!raw.verified,
+          lastTweetAt,
+          lastTweetText,
         };
         if (u.id && u.username && !seen.has(u.id)) {
           seen.add(u.id);
@@ -436,6 +465,38 @@ export class XUnfollowersDirectScraper {
     });
 
     const nonFollowers = following.filter((u) => u.followedBy === false || (this.stopFlag && u.followedBy == null));
+
+    // Non-followers için eksik takipçi sayılarını ve son tweet tarihlerini doğrudan tamamla
+    if (nonFollowers.length > 0 && !this.stopFlag) {
+      onStatus?.(`Hesap bilgileri ve son tweetler çekiliyor... (${nonFollowers.length} hesap)`);
+      try {
+        const toLookup = nonFollowers.map((u) => u.username);
+        const lookupRes = await this.lookupUsers(toLookup);
+        if (lookupRes && lookupRes.length > 0) {
+          const map = new Map(lookupRes.map((r) => [r.username.toLowerCase(), r]));
+          for (const u of nonFollowers) {
+            const res = map.get(u.username.toLowerCase());
+            if (res) {
+              if (typeof res.followersCount === 'number' && res.followersCount > 0) {
+                u.followers = res.followersCount;
+              }
+              if (typeof res.lastTweetAt === 'number') {
+                u.lastTweetAt = res.lastTweetAt;
+              }
+              if (res.lastTweetText) {
+                u.lastTweetText = res.lastTweetText;
+              }
+              if (res.bio && !u.bio) {
+                u.bio = res.bio;
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('Auto lookup for nonFollowers failed:', e);
+      }
+    }
+
     return nonFollowers;
   }
 
@@ -475,6 +536,8 @@ export class XUnfollowersDirectScraper {
       displayName: u.name,
       avatarUrl: u.avatar,
       bio: u.bio,
+      lastTweetAt: u.lastTweetAt,
+      lastTweetText: u.lastTweetText,
       followersCount: typeof u.followers === 'number' ? u.followers : 0,
       followingCount: typeof u.followingCount === 'number' ? u.followingCount : 0,
       isFollowing,
@@ -534,11 +597,22 @@ export class XUnfollowersDirectScraper {
         const toLookup = needFollowerCounts.map((u) => u.username);
         const lookupRes = await this.lookupUsers(toLookup);
         if (lookupRes && lookupRes.length > 0) {
-          const map = new Map(lookupRes.map((r) => [r.username.toLowerCase(), r.followersCount]));
+          const map = new Map(lookupRes.map((r) => [r.username.toLowerCase(), r]));
           for (const u of followingRaw) {
-            const count = map.get(u.username.toLowerCase());
-            if (typeof count === 'number' && count > 0) {
-              u.followers = count;
+            const res = map.get(u.username.toLowerCase());
+            if (res) {
+              if (typeof res.followersCount === 'number' && res.followersCount > 0) {
+                u.followers = res.followersCount;
+              }
+              if (typeof res.lastTweetAt === 'number') {
+                u.lastTweetAt = res.lastTweetAt;
+              }
+              if (res.lastTweetText) {
+                u.lastTweetText = res.lastTweetText;
+              }
+              if (res.bio && !u.bio) {
+                u.bio = res.bio;
+              }
             }
           }
         }
@@ -553,11 +627,22 @@ export class XUnfollowersDirectScraper {
         const toLookup = followersNeedCounts.map((u) => u.username);
         const lookupRes = await this.lookupUsers(toLookup);
         if (lookupRes && lookupRes.length > 0) {
-          const map = new Map(lookupRes.map((r) => [r.username.toLowerCase(), r.followersCount]));
+          const map = new Map(lookupRes.map((r) => [r.username.toLowerCase(), r]));
           for (const u of followersRaw) {
-            const count = map.get(u.username.toLowerCase());
-            if (typeof count === 'number' && count > 0) {
-              u.followers = count;
+            const res = map.get(u.username.toLowerCase());
+            if (res) {
+              if (typeof res.followersCount === 'number' && res.followersCount > 0) {
+                u.followers = res.followersCount;
+              }
+              if (typeof res.lastTweetAt === 'number') {
+                u.lastTweetAt = res.lastTweetAt;
+              }
+              if (res.lastTweetText) {
+                u.lastTweetText = res.lastTweetText;
+              }
+              if (res.bio && !u.bio) {
+                u.bio = res.bio;
+              }
             }
           }
         }
@@ -593,8 +678,26 @@ export class XUnfollowersDirectScraper {
 
   public async lookupUsers(
     usersOrScreenNames: string[]
-  ): Promise<{ username: string; followersCount: number; id?: string; avatar?: string; displayName?: string; bio?: string }[]> {
-    const results: { username: string; followersCount: number; id?: string; avatar?: string; displayName?: string; bio?: string }[] = [];
+  ): Promise<{
+    username: string;
+    followersCount: number;
+    id?: string;
+    avatar?: string;
+    displayName?: string;
+    bio?: string;
+    lastTweetAt?: number;
+    lastTweetText?: string;
+  }[]> {
+    const results: {
+      username: string;
+      followersCount: number;
+      id?: string;
+      avatar?: string;
+      displayName?: string;
+      bio?: string;
+      lastTweetAt?: number;
+      lastTweetText?: string;
+    }[] = [];
     const cleaned = usersOrScreenNames
       .map((s) => String(s || '').trim().replace(/^@/, ''))
       .filter(Boolean);
@@ -620,6 +723,18 @@ export class XUnfollowersDirectScraper {
         }
         if (Array.isArray(json)) {
           for (const u of json) {
+            let lastTweetAt: number | undefined;
+            let lastTweetText: string | undefined;
+            if (u.status) {
+              if (u.status.created_at) {
+                const parsed = Date.parse(u.status.created_at);
+                if (!isNaN(parsed) && parsed > 0) lastTweetAt = parsed;
+              }
+              if (u.status.text || u.status.full_text) {
+                lastTweetText = u.status.full_text || u.status.text;
+              }
+            }
+
             results.push({
               id: String(u.id_str || u.id),
               username: u.screen_name,
@@ -627,6 +742,8 @@ export class XUnfollowersDirectScraper {
               followersCount: typeof u.followers_count === 'number' ? u.followers_count : 0,
               avatar: u.profile_image_url_https || '',
               bio: u.description || '',
+              lastTweetAt,
+              lastTweetText,
             });
           }
         }

@@ -27,6 +27,7 @@ import {
 import { UnfollowerUser, UnfollowersSettings, SafetyPreset } from '../types/unfollowers';
 import { unfollowersService } from '../services/unfollowers-service';
 import { matchSmartSearch, SMART_SEARCH_PRESETS, SmartSearchPreset } from '../utils/smart-search';
+import { formatLastTweetDate } from '../utils/date-format';
 import { useAppStore } from '../store/app-store';
 import { translations, Language } from '../i18n';
 
@@ -42,7 +43,9 @@ type SortOption =
   | 'followers_desc'
   | 'followers_asc'
   | 'name_asc'
-  | 'name_desc';
+  | 'name_desc'
+  | 'last_tweet_desc'
+  | 'last_tweet_asc';
 
 export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
   const t = translations[lang].unfollowers;
@@ -601,6 +604,14 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
       case 'name_desc':
         sorted.sort((a, b) => b.name.localeCompare(a.name));
         break;
+      case 'last_tweet_desc':
+        // En son gönderi atanlar en üstte (gönderisi olmayanlar en altta)
+        sorted.sort((a, b) => (b.lastTweetAt || 0) - (a.lastTweetAt || 0));
+        break;
+      case 'last_tweet_asc':
+        // İnaktif / Hayalet hesaplar en üstte (hiç tweet atmamış veya en eski olanlar)
+        sorted.sort((a, b) => (a.lastTweetAt || 0) - (b.lastTweetAt || 0));
+        break;
       default:
         break;
     }
@@ -1078,6 +1089,8 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
               <option value="followers_asc">{t.sort.followersAsc} (↑)</option>
               <option value="name_asc">{t.sort.nameAsc}</option>
               <option value="name_desc">{t.sort.nameDesc}</option>
+              <option value="last_tweet_desc">{t.sort.lastTweetDesc}</option>
+              <option value="last_tweet_asc">{t.sort.lastTweetAsc}</option>
             </select>
           </div>
 
@@ -1412,7 +1425,7 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
                           </span>
                         )}
                       </div>
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex flex-wrap items-center gap-1.5">
                         <a
                           href={`https://x.com/${user.username}`}
                           target="_blank"
@@ -1433,6 +1446,21 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
                             </span>
                           ) : null;
                         })()}
+                        {user.lastTweetAt ? (() => {
+                          const tweetBadge = formatLastTweetDate(user.lastTweetAt, lang);
+                          return (
+                            <span
+                              className={`text-[10px] px-1.5 py-0.5 rounded font-medium flex items-center gap-0.5 ${tweetBadge.colorClass}`}
+                              title={user.lastTweetText ? `Son Gönderi: "${user.lastTweetText}"` : undefined}
+                            >
+                              {tweetBadge.badgeText}
+                            </span>
+                          );
+                        })() : (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-400 font-medium">
+                            {lang === 'tr' ? '⚪ Tweet Yok' : '⚪ No Tweet'}
+                          </span>
+                        )}
                       </div>
                       {user.bio ? (
                         <p className="text-xs text-gray-500 line-clamp-1 mt-0.5 max-w-xs sm:max-w-md" title={user.bio}>

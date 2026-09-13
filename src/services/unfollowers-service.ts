@@ -386,7 +386,7 @@ export class UnfollowersService {
    */
   public async fetchFollowerCountsDirect(
     usernamesOrIds: string[]
-  ): Promise<{ username: string; followersCount: number; id?: string; avatar?: string; displayName?: string; bio?: string }[]> {
+  ): Promise<{ username: string; followersCount: number; id?: string; avatar?: string; displayName?: string; bio?: string; lastTweetAt?: number; lastTweetText?: string }[]> {
     const tabId = await this.ensureXSession();
     const response: any = await new Promise((resolve, reject) => {
       chrome.tabs.sendMessage(

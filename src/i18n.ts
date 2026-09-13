@@ -73,6 +73,8 @@ export const translations = {
         followersAsc: '👤 En Az Takipçi',
         nameAsc: '🔤 İsim (A → Z)',
         nameDesc: '🔤 İsim (Z → A)',
+        lastTweetDesc: '⚡ En Son Gönderi (Yeniden Eskiye)',
+        lastTweetAsc: '💤 İnaktifler (En Eski / Gönderi Yok)',
       },
     },
     // Scan status
@@ -151,6 +153,8 @@ export const translations = {
         followersAsc: 'En Az Takipçi',
         nameAsc: 'İsim (A → Z)',
         nameDesc: 'İsim (Z → A)',
+        lastTweetDesc: '⚡ En Son Gönderi (Yeniden Eskiye)',
+        lastTweetAsc: '💤 İnaktifler (En Eski / Gönderi Yok)',
       },
       filters: {
         quickLabel: 'Hızlı Takipçi Filtresi:',
@@ -244,6 +248,8 @@ export const translations = {
         followersAsc: '👤 Least Followers',
         nameAsc: '🔤 Name (A → Z)',
         nameDesc: '🔤 Name (Z → A)',
+        lastTweetDesc: '⚡ Newest Post First',
+        lastTweetAsc: '💤 Inactive (Oldest / No Post)',
       },
     },
     // Scan status
@@ -322,6 +328,8 @@ export const translations = {
         followersAsc: 'Fewest Followers',
         nameAsc: 'Name (A → Z)',
         nameDesc: 'Name (Z → A)',
+        lastTweetDesc: '⚡ Newest Post First',
+        lastTweetAsc: '💤 Inactive (Oldest / No Post)',
       },
       filters: {
         quickLabel: 'Quick Follower Filter:',

@@ -27,6 +27,7 @@ import { useAppStore } from '../store/app-store';
 import { unfollowersService } from '../services/unfollowers-service';
 import { UnfollowersSettings, SafetyPreset } from '../types/unfollowers';
 import { matchSmartSearch, SMART_SEARCH_PRESETS, SmartSearchPreset } from '../utils/smart-search';
+import { formatLastTweetDate } from '../utils/date-format';
 
 const PAGE_SIZE = 50;
 
@@ -36,7 +37,9 @@ export type TableSortOption =
   | 'followers_desc'
   | 'followers_asc'
   | 'name_asc'
-  | 'name_desc';
+  | 'name_desc'
+  | 'last_tweet_desc'
+  | 'last_tweet_asc';
 
 interface UserTableProps {
   users: XUser[];
@@ -235,6 +238,8 @@ export const UserTable: React.FC<UserTableProps> = ({
               followersCount: typeof item.followersCount === 'number' ? item.followersCount : u.followersCount,
               ...(item.bio ? { bio: item.bio } : {}),
               ...(item.displayName ? { displayName: item.displayName } : {}),
+              ...(typeof item.lastTweetAt === 'number' ? { lastTweetAt: item.lastTweetAt } : {}),
+              ...(item.lastTweetText ? { lastTweetText: item.lastTweetText } : {}),
             });
           }
         }
@@ -272,25 +277,32 @@ export const UserTable: React.FC<UserTableProps> = ({
     }
   };
 
-  // 1. Önbellekteki (xrm_cached_unfollowers) veriler ile takipçi sayılarını otomatik eşitle
+  // 1. Önbellekteki (xrm_cached_unfollowers) veriler ile takipçi sayılarını ve son tweet tarihlerini otomatik eşitle
   useEffect(() => {
     void (async () => {
       try {
         const cached = await chrome.storage.local.get('xrm_cached_unfollowers');
         if (Array.isArray(cached.xrm_cached_unfollowers) && cached.xrm_cached_unfollowers.length > 0) {
-          const map = new Map<string, number>();
+          const map = new Map<string, any>();
           for (const u of cached.xrm_cached_unfollowers) {
-            if (u.username && typeof u.followers === 'number') {
-              map.set(u.username.toLowerCase(), u.followers);
+            if (u.username) {
+              map.set(u.username.toLowerCase(), u);
             }
           }
 
-          const updates: { id: string; followersCount: number }[] = [];
+          const updates: Partial<XUser>[] = [];
           for (const u of users) {
-            if (typeof u.followersCount !== 'number' || !Number.isFinite(u.followersCount)) {
-              const count = map.get(u.username.toLowerCase());
-              if (typeof count === 'number') {
-                updates.push({ id: u.id, followersCount: count });
+            const item = map.get(u.username.toLowerCase());
+            if (item) {
+              const needsCount = typeof u.followersCount !== 'number' || !Number.isFinite(u.followersCount);
+              const needsTweet = !u.lastTweetAt && typeof item.lastTweetAt === 'number';
+              if (needsCount || needsTweet) {
+                updates.push({
+                  id: u.id,
+                  ...(typeof item.followers === 'number' ? { followersCount: item.followers } : {}),
+                  ...(typeof item.lastTweetAt === 'number' ? { lastTweetAt: item.lastTweetAt } : {}),
+                  ...(item.lastTweetText ? { lastTweetText: item.lastTweetText } : {}),
+                });
               }
             }
           }
@@ -319,12 +331,17 @@ export const UserTable: React.FC<UserTableProps> = ({
           const list = unknownUsers.map((u) => u.username || u.id);
           const results = await unfollowersService.fetchFollowerCountsDirect(list);
           if (results && results.length > 0) {
-            const map = new Map(results.map((r) => [r.username.toLowerCase(), r.followersCount]));
-            const updates: { id: string; followersCount: number }[] = [];
+            const map = new Map(results.map((r) => [r.username.toLowerCase(), r]));
+            const updates: Partial<XUser>[] = [];
             for (const u of unknownUsers) {
-              const count = map.get(u.username.toLowerCase());
-              if (typeof count === 'number') {
-                updates.push({ id: u.id, followersCount: count });
+              const res = map.get(u.username.toLowerCase());
+              if (res) {
+                updates.push({
+                  id: u.id,
+                  ...(typeof res.followersCount === 'number' ? { followersCount: res.followersCount } : {}),
+                  ...(typeof res.lastTweetAt === 'number' ? { lastTweetAt: res.lastTweetAt } : {}),
+                  ...(res.lastTweetText ? { lastTweetText: res.lastTweetText } : {}),
+                });
               }
             }
             if (updates.length > 0) {
@@ -347,11 +364,13 @@ export const UserTable: React.FC<UserTableProps> = ({
 
         for (const u of users) {
           const item = userMap.get(u.username.toLowerCase());
-          if (item && (typeof item.followers === 'number' || item.bio)) {
+          if (item && (typeof item.followers === 'number' || item.bio || typeof item.lastTweetAt === 'number')) {
             updates.push({
               id: u.id,
               ...(typeof item.followers === 'number' ? { followersCount: item.followers } : {}),
               ...(item.bio ? { bio: item.bio } : {}),
+              ...(typeof item.lastTweetAt === 'number' ? { lastTweetAt: item.lastTweetAt } : {}),
+              ...(item.lastTweetText ? { lastTweetText: item.lastTweetText } : {}),
             });
           }
         }
@@ -526,6 +545,14 @@ export const UserTable: React.FC<UserTableProps> = ({
         break;
       case 'name_desc':
         sorted.sort((a, b) => b.displayName.localeCompare(a.displayName));
+        break;
+      case 'last_tweet_desc':
+        // En son gönderi atanlar en üstte (tarihi olmayanlar en altta)
+        sorted.sort((a, b) => (b.lastTweetAt || 0) - (a.lastTweetAt || 0));
+        break;
+      case 'last_tweet_asc':
+        // İnaktif / Hayalet hesaplar en üstte (hiç tweet atmamış veya en eski atanlar)
+        sorted.sort((a, b) => (a.lastTweetAt || 0) - (b.lastTweetAt || 0));
         break;
       default:
         break;
@@ -1024,6 +1051,8 @@ export const UserTable: React.FC<UserTableProps> = ({
               <option value="followers_asc">{t.sort?.followersAsc || '👤 En Az Takipçi'}</option>
               <option value="name_asc">{t.sort?.nameAsc || '🔤 İsim (A → Z)'}</option>
               <option value="name_desc">{t.sort?.nameDesc || '🔤 İsim (Z → A)'}</option>
+              <option value="last_tweet_desc">{t.sort?.lastTweetDesc || '⚡ En Son Gönderi (Yeniden Eskiye)'}</option>
+              <option value="last_tweet_asc">{t.sort?.lastTweetAsc || '💤 İnaktifler (En Eski / Gönderi Yok)'}</option>
             </select>
           </div>
         </div>
@@ -1068,7 +1097,7 @@ export const UserTable: React.FC<UserTableProps> = ({
             )}
           </div>
           <span className="text-[11px] font-mono text-gray-400">
-            Aktif Sıra: {sortOption === 'oldest' ? '⏳ Eskiden Yeniye (İlkler Önde)' : sortOption === 'newest' ? '⚡ Yeniden Eskiye (Sonlar Önde)' : sortOption}
+            Aktif Sıra: {sortOption === 'oldest' ? '⏳ Eskiden Yeniye (İlkler Önde)' : sortOption === 'newest' ? '⚡ Yeniden Eskiye (Sonlar Önde)' : sortOption === 'last_tweet_desc' ? '⚡ En Son Gönderi' : sortOption === 'last_tweet_asc' ? '💤 İnaktifler (En Eski)' : sortOption}
           </span>
         </div>
 
@@ -1427,7 +1456,7 @@ export const UserTable: React.FC<UserTableProps> = ({
                           <div className="font-semibold text-gray-900 truncate text-sm">
                             {user.displayName}
                           </div>
-                          <div className="flex items-center gap-1.5">
+                          <div className="flex flex-wrap items-center gap-1.5">
                             <a
                               href={`https://x.com/${user.username}`}
                               target="_blank"
@@ -1444,6 +1473,21 @@ export const UserTable: React.FC<UserTableProps> = ({
                                 #{user.scanOrder + 1}
                               </span>
                             ) : null}
+                            {user.lastTweetAt ? (() => {
+                              const tweetBadge = formatLastTweetDate(user.lastTweetAt, lang);
+                              return (
+                                <span
+                                  className={`text-[10px] px-1.5 py-0.5 rounded font-medium flex-shrink-0 ${tweetBadge.colorClass}`}
+                                  title={user.lastTweetText ? `Son Gönderi: "${user.lastTweetText}"` : undefined}
+                                >
+                                  {tweetBadge.badgeText}
+                                </span>
+                              );
+                            })() : (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-400 font-medium flex-shrink-0">
+                                {lang === 'tr' ? '⚪ Tweet Yok' : '⚪ No Tweet'}
+                              </span>
+                            )}
                           </div>
                           {user.bio ? (
                             <p className="text-xs text-gray-500 line-clamp-1 mt-0.5 max-w-xs sm:max-w-md" title={user.bio}>

@@ -9,6 +9,8 @@ export interface UnfollowerUser {
   followedBy: boolean | null;
   verified: boolean;
   isWhitelisted?: boolean;
+  lastTweetAt?: number; // Son gönderi / tweet tarihi (Epoch ms)
+  lastTweetText?: string; // Son gönderi metin özeti
 }
 
 export type SafetyPreset = 'safe' | 'balanced' | 'fast' | 'custom';

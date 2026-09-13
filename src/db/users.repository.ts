@@ -36,6 +36,8 @@ export const userRepository = {
           scanOrder: typeof user.scanOrder === 'number' ? user.scanOrder : existing.scanOrder,
           followedAt: user.followedAt ?? existing.followedAt,
           followerSince: user.followerSince ?? existing.followerSince,
+          lastTweetAt: user.lastTweetAt ?? existing.lastTweetAt,
+          lastTweetText: user.lastTweetText ?? existing.lastTweetText,
           lastSeenAt: Date.now(),
         } as XUser);
       } else {
@@ -52,6 +54,8 @@ export const userRepository = {
           scanOrder: user.scanOrder,
           followedAt: user.followedAt,
           followerSince: user.followerSince,
+          lastTweetAt: user.lastTweetAt,
+          lastTweetText: user.lastTweetText,
         } as XUser);
       }
     }
@@ -156,6 +160,8 @@ export const userRepository = {
           scanOrder: typeof user.scanOrder === 'number' ? user.scanOrder : existing.scanOrder,
           followedAt: existing.followedAt ?? user.followedAt,
           followerSince: user.followerSince ?? existing.followerSince,
+          lastTweetAt: user.lastTweetAt ?? existing.lastTweetAt,
+          lastTweetText: user.lastTweetText ?? existing.lastTweetText,
           followersCount:
             typeof user.followersCount === 'number'
               ? user.followersCount
@@ -188,6 +194,8 @@ export const userRepository = {
           scanOrder: user.scanOrder,
           followedAt: user.followedAt,
           followerSince: user.followerSince ?? (isFollower ? now : undefined),
+          lastTweetAt: user.lastTweetAt,
+          lastTweetText: user.lastTweetText,
           followersCount: user.followersCount,
           followingCount: user.followingCount,
         } as XUser);
