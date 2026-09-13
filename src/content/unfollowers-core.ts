@@ -706,8 +706,7 @@ export class XUnfollowersDirectScraper {
     for (let i = 0; i < cleaned.length; i += 100) {
       if (this.stopFlag) break;
       const batch = cleaned.slice(i, i + 100);
-      const isNumeric = batch.every((s) => /^\d+$/.test(s));
-      const paramName = isNumeric ? 'user_id' : 'screen_name';
+      const paramName = 'screen_name';
       const paramVal = batch.join(',');
 
       try {
@@ -718,12 +717,14 @@ export class XUnfollowersDirectScraper {
           tweet_mode: 'extended',
         }).toString();
 
-        let json = await this.xRequest('/i/api/1.1/users/lookup.json', {
-          method: 'POST',
-          body: postBody,
-        });
-        if (!Array.isArray(json)) {
-          // Fallback GET
+        let json = null;
+        try {
+          json = await this.xRequest('/i/api/1.1/users/lookup.json', {
+            method: 'POST',
+            body: postBody,
+          });
+        } catch (e: any) {
+          // Eğer 404 dönerse (No user matches), veya başka bir hataysa GET dene
           json = await this.xRequest(
             `/i/api/1.1/users/lookup.json?${paramName}=${encodeURIComponent(paramVal)}&include_entities=1&skip_status=0&tweet_mode=extended`
           );

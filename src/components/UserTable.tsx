@@ -236,8 +236,8 @@ export const UserTable: React.FC<UserTableProps> = ({
       // 100'erli paketler halinde çağır ve her pakette IndexedDB'yi canlı güncelle
       for (let i = 0; i < targetUsers.length; i += 100) {
         const batchUsers = targetUsers.slice(i, i + 100);
-        const list = batchUsers.map((u) => (u.username || u.id).replace(/^@/, '').trim()).filter(Boolean);
-        const results = await unfollowersService.fetchFollowerCountsDirect(list);
+        const list = batchUsers.map((u) => u.username?.replace(/^@/, '').trim()).filter(Boolean);
+        const results = await unfollowersService.fetchFollowerCountsDirect(list as string[]);
 
         if (results && results.length > 0) {
           const resultMap = new Map(results.map((r) => [r.username.toLowerCase(), r]));

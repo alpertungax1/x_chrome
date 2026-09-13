@@ -580,32 +580,41 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
     setStatusType('info');
 
     try {
-      const usernames = targets.map((u) => u.username);
-      const results = await unfollowersService.fetchFollowerCountsDirect(usernames);
+      let totalUpdated = 0;
+      const allUsernames = targets.map((u) => u.username).filter(Boolean);
 
-      if (results && results.length > 0) {
-        const map = new Map(results.map((r) => [r.username.toLowerCase(), r]));
-        setAccounts((prev) => {
-          const next = prev.map((u) => {
-            const item = map.get(u.username.toLowerCase());
-            if (item) {
-              return {
-                ...u,
-                ...(typeof item.followersCount === 'number' && item.followersCount > 0 ? { followers: item.followersCount } : {}),
-                ...(typeof item.lastTweetAt === 'number' ? { lastTweetAt: item.lastTweetAt } : {}),
-                ...(item.lastTweetText ? { lastTweetText: item.lastTweetText } : {}),
-                ...(item.bio && !u.bio ? { bio: item.bio } : {}),
-              };
-            }
-            return u;
+      for (let i = 0; i < allUsernames.length; i += 100) {
+        if (unfollowAbortRef.current) break; // Eğer iptal edildiyse
+        const batch = allUsernames.slice(i, i + 100);
+        setStatusText(lang === 'tr' ? `Son tweet tarihleri çekiliyor... (${i}/${targets.length})` : `Fetching tweet dates... (${i}/${targets.length})`);
+        
+        const results = await unfollowersService.fetchFollowerCountsDirect(batch);
+
+        if (results && results.length > 0) {
+          totalUpdated += results.length;
+          const map = new Map(results.map((r) => [r.username.toLowerCase(), r]));
+          setAccounts((prev) => {
+            const next = prev.map((u) => {
+              const item = map.get(u.username.toLowerCase());
+              if (item) {
+                return {
+                  ...u,
+                  ...(typeof item.followersCount === 'number' && item.followersCount > 0 ? { followers: item.followersCount } : {}),
+                  ...(typeof item.lastTweetAt === 'number' ? { lastTweetAt: item.lastTweetAt } : {}),
+                  ...(item.lastTweetText ? { lastTweetText: item.lastTweetText } : {}),
+                  ...(item.bio && !u.bio ? { bio: item.bio } : {}),
+                };
+              }
+              return u;
+            });
+            void chrome.storage.local.set({ xrm_cached_unfollowers: next });
+            return next;
           });
-          void chrome.storage.local.set({ xrm_cached_unfollowers: next });
-          return next;
-        });
-
-        setStatusText(lang === 'tr' ? `Harika! ${results.length} hesabın son tweet tarihi güncellendi.` : `Success! ${results.length} accounts updated.`);
-        setStatusType('ok');
+        }
       }
+
+      setStatusText(lang === 'tr' ? `Harika! ${totalUpdated} hesabın son tweet tarihi güncellendi.` : `Success! ${totalUpdated} accounts updated.`);
+      setStatusType('ok');
     } catch (e: any) {
       setStatusText('Tweet tarihleri çekilemedi: ' + (e?.message || 'Hata'));
       setStatusType('warn');
