@@ -511,21 +511,24 @@ export class XUnfollowersDirectScraper {
     onStatus?.('Takip edilenler taranıyor (API)...');
 
     let followingRaw: UnfollowerUser[] = [];
-    for (const qid of FALLBACK_QUERY_IDS) {
-      try {
-        followingRaw = await this.fetchFollowingGraphQL(qid, FALLBACK_FEATURES, (count) => {
-          onStatus?.(`Takip edilenler taranıyor: ${count} hesap`);
-        });
-        break;
-      } catch (_) {}
-    }
+    
+    // ÖNCE REST API (Çünkü Son Tweet Tarihleri sadece burada var)
+    try {
+      followingRaw = await this.fetchFollowingRest((count) => {
+        onStatus?.(`Takip edilenler taranıyor (REST): ${count} hesap`);
+      });
+    } catch (_) {}
 
+    // Eğer REST API rate limite takılır veya boş dönerse GraphQL'e düş (Ancak tweet tarihleri olmaz)
     if (!followingRaw.length && !this.stopFlag) {
-      try {
-        followingRaw = await this.fetchFollowingRest((count) => {
-          onStatus?.(`Takip edilenler taranıyor (REST): ${count} hesap`);
-        });
-      } catch (_) {}
+      for (const qid of FALLBACK_QUERY_IDS) {
+        try {
+          followingRaw = await this.fetchFollowingGraphQL(qid, FALLBACK_FEATURES, (count) => {
+            onStatus?.(`Takip edilenler taranıyor: ${count} hesap`);
+          });
+          break;
+        } catch (_) {}
+      }
     }
 
     const now = Date.now();
@@ -571,22 +574,26 @@ export class XUnfollowersDirectScraper {
 
     // Takipçileri de çek (sadece takip eden ama geri takip edilmeyenleri tamamlamak için)
     onStatus?.('Takipçiler taranıyor (API)...');
+    onStatus?.('Takipçiler taranıyor (API)...');
     let followersRaw: UnfollowerUser[] = [];
-    for (const qid of FALLBACK_QUERY_IDS) {
-      try {
-        followersRaw = await this.fetchFollowersGraphQL(qid, FALLBACK_FEATURES, (count) => {
-          onStatus?.(`Takipçiler taranıyor: ${count} hesap`);
-        });
-        break;
-      } catch (_) {}
-    }
+    
+    // ÖNCE REST API
+    try {
+      followersRaw = await this.fetchFollowersRest((count) => {
+        onStatus?.(`Takipçiler taranıyor (REST): ${count} hesap`);
+      });
+    } catch (_) {}
 
+    // REST API başarısız olursa GraphQL Fallback
     if (!followersRaw.length && !this.stopFlag) {
-      try {
-        followersRaw = await this.fetchFollowersRest((count) => {
-          onStatus?.(`Takipçiler taranıyor (REST): ${count} hesap`);
-        });
-      } catch (_) {}
+      for (const qid of FALLBACK_QUERY_IDS) {
+        try {
+          followersRaw = await this.fetchFollowersGraphQL(qid, FALLBACK_FEATURES, (count) => {
+            onStatus?.(`Takipçiler taranıyor: ${count} hesap`);
+          });
+          break;
+        } catch (_) {}
+      }
     }
 
     // Takipçi sayıları eksik veya 0 olan kullanıcıların gerçek sayılarını doğrudan X API'sinden tamamla

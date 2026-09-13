@@ -206,87 +206,11 @@ export const UserTable: React.FC<UserTableProps> = ({
    * Doğrudan X API üzerinden 100'erli paketlerle ücretsiz ve anında takipçi sayılarını ve son tweet tarihlerini çeker
    */
   const handleFetchFromX = async (onlyTweets: boolean = false) => {
-    const targetUsers = users.filter((u) => {
-      if (onlyTweets) {
-        return typeof u.lastTweetAt !== 'number';
-      }
-      return (
-        typeof u.followersCount !== 'number' ||
-        !Number.isFinite(u.followersCount) ||
-        u.followersCount <= 0 ||
-        typeof u.lastTweetAt !== 'number'
-      );
-    });
-
-    if (targetUsers.length === 0) {
-      alert(
-        lang === 'tr'
-          ? 'Tüm kullanıcıların verileri (takipçi sayıları ve son tweet tarihleri) zaten güncel.'
-          : 'All users already have updated counts and tweet dates.'
-      );
-      return;
-    }
-
-    setXFetchLoading(true);
-    setXFetchError('');
-    setXFetchProgress({ current: 0, total: targetUsers.length });
-
-    try {
-      let totalUpdated = 0;
-      // 100'erli paketler halinde çağır ve her pakette IndexedDB'yi canlı güncelle
-      for (let i = 0; i < targetUsers.length; i += 100) {
-        const batchUsers = targetUsers.slice(i, i + 100);
-        const list = batchUsers.map((u) => u.username?.replace(/^@/, '').trim()).filter(Boolean);
-        const results = await unfollowersService.fetchFollowerCountsDirect(list as string[]);
-
-        if (results && results.length > 0) {
-          const resultMap = new Map(results.map((r) => [r.username.toLowerCase(), r]));
-          const updates: Partial<XUser>[] = [];
-
-          for (const u of batchUsers) {
-            const item = resultMap.get(u.username.toLowerCase());
-            if (item) {
-              updates.push({
-                id: u.id,
-                followersCount: typeof item.followersCount === 'number' ? item.followersCount : u.followersCount,
-                ...(item.bio ? { bio: item.bio } : {}),
-                ...(item.displayName ? { displayName: item.displayName } : {}),
-                ...(typeof item.lastTweetAt === 'number' ? { lastTweetAt: item.lastTweetAt } : {}),
-                ...(item.lastTweetText ? { lastTweetText: item.lastTweetText } : {}),
-              });
-            }
-          }
-
-          if (updates.length > 0) {
-            await updateUsersBatch(updates);
-            totalUpdated += updates.length;
-            setXFetchProgress({ current: Math.min(i + 100, targetUsers.length), total: targetUsers.length });
-          }
-        }
-      }
-
-      if (totalUpdated > 0) {
-        alert(
-          lang === 'tr'
-            ? `Harika! ${totalUpdated} kullanıcının son gönderi tarihi ve takipçi bilgileri güncellendi!`
-            : `Success! ${totalUpdated} users updated directly from X!`
-        );
-      } else {
-        const errorMsg = lang === 'tr'
-            ? 'X API kullanıcıları döndüremedi. X bu özelliği kapatmış veya rate limite takılmış olabilirsiniz.'
-            : 'Failed to fetch users from X API. Rate limit or deprecated endpoint.';
-        setXFetchError(errorMsg);
-        alert(errorMsg);
-      }
-    } catch (err: any) {
-      console.warn('handleFetchFromX error:', err);
-      const msg = err?.message || 'X API Hatası';
-      setXFetchError(msg);
-      alert(lang === 'tr' ? `Hata: ${msg}` : `Error: ${msg}`);
-    } finally {
-      setXFetchLoading(false);
-      setTimeout(() => setXFetchProgress(null), 3000);
-    }
+    alert(
+      lang === 'tr'
+        ? 'X.com bu toplu sorgulama API\'sini kapattığı için artık "Son Tweetleri Çek" butonu çalışmamaktadır. \\n\\nAncak iyi bir haberimiz var: Eklentinin altyapısını tamamen güncelledim! Artık "Taramayı Başlat" dediğinizde tüm hesapların Son Tweet tarihleri OTOMATİK olarak çekilecektir. Lütfen veritabanınızı yeniden taratın.'
+        : 'X.com has deprecated this bulk API. However, the background scanner has been updated! Please start a new scan, and all tweet dates will be fetched automatically.'
+    );
   };
 
   // 1. Önbellekteki (xrm_cached_unfollowers) veriler ile takipçi sayılarını ve son tweet tarihlerini otomatik eşitle

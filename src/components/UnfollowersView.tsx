@@ -572,55 +572,11 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
   }, [accounts]);
 
   const handleFetchTweetDates = async () => {
-    const targets = accounts.filter((u) => typeof u.lastTweetAt !== 'number');
-    if (targets.length === 0) return;
-
-    setIsFetchingTweets(true);
-    setStatusText(lang === 'tr' ? `Son tweet tarihleri çekiliyor... (0/${targets.length})` : `Fetching tweet dates... (0/${targets.length})`);
-    setStatusType('info');
-
-    try {
-      let totalUpdated = 0;
-      const allUsernames = targets.map((u) => u.username).filter(Boolean);
-
-      for (let i = 0; i < allUsernames.length; i += 100) {
-        if (unfollowAbortRef.current) break; // Eğer iptal edildiyse
-        const batch = allUsernames.slice(i, i + 100);
-        setStatusText(lang === 'tr' ? `Son tweet tarihleri çekiliyor... (${i}/${targets.length})` : `Fetching tweet dates... (${i}/${targets.length})`);
-        
-        const results = await unfollowersService.fetchFollowerCountsDirect(batch);
-
-        if (results && results.length > 0) {
-          totalUpdated += results.length;
-          const map = new Map(results.map((r) => [r.username.toLowerCase(), r]));
-          setAccounts((prev) => {
-            const next = prev.map((u) => {
-              const item = map.get(u.username.toLowerCase());
-              if (item) {
-                return {
-                  ...u,
-                  ...(typeof item.followersCount === 'number' && item.followersCount > 0 ? { followers: item.followersCount } : {}),
-                  ...(typeof item.lastTweetAt === 'number' ? { lastTweetAt: item.lastTweetAt } : {}),
-                  ...(item.lastTweetText ? { lastTweetText: item.lastTweetText } : {}),
-                  ...(item.bio && !u.bio ? { bio: item.bio } : {}),
-                };
-              }
-              return u;
-            });
-            void chrome.storage.local.set({ xrm_cached_unfollowers: next });
-            return next;
-          });
-        }
-      }
-
-      setStatusText(lang === 'tr' ? `Harika! ${totalUpdated} hesabın son tweet tarihi güncellendi.` : `Success! ${totalUpdated} accounts updated.`);
-      setStatusType('ok');
-    } catch (e: any) {
-      setStatusText('Tweet tarihleri çekilemedi: ' + (e?.message || 'Hata'));
-      setStatusType('warn');
-    } finally {
-      setIsFetchingTweets(false);
-    }
+    alert(
+      lang === 'tr'
+        ? 'X.com bu toplu sorgulama API\'sini kapattığı için artık "Son Tweetleri Çek" butonu çalışmamaktadır. \\n\\nAncak iyi bir haberimiz var: Eklentinin altyapısını tamamen güncelledim! Artık "Taramayı Başlat" dediğinizde tüm hesapların Son Tweet tarihleri OTOMATİK olarak çekilecektir. Lütfen veritabanınızı yeniden taratın.'
+        : 'X.com has deprecated this bulk API. However, the background scanner has been updated! Please start a new scan, and all tweet dates will be fetched automatically.'
+    );
   };
 
   // ═══════════════════════════════════════════════════════════
