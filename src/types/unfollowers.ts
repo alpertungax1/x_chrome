@@ -13,7 +13,7 @@ export interface UnfollowerUser {
   lastTweetText?: string; // Son gönderi metin özeti
 }
 
-export type SafetyPreset = 'safe' | 'balanced' | 'fast' | 'custom';
+export type SafetyPreset = 'safe' | 'balanced' | 'fast' | 'premium' | 'custom';
 
 export interface UnfollowersSettings {
   delaySeconds: number; // Eski uyumluluk için

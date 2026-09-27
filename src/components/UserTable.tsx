@@ -137,7 +137,18 @@ export const UserTable: React.FC<UserTableProps> = ({
 
   const applySafetyPreset = async (preset: SafetyPreset) => {
     let updates: Partial<UnfollowersSettings> = { safetyPreset: preset };
-    if (preset === 'balanced') {
+    if (preset === 'premium') {
+      updates = {
+        ...updates,
+        minDelaySeconds: 1.8,
+        maxDelaySeconds: 3.5,
+        jitter: true,
+        enableBatchCooldown: true,
+        batchSize: 35,
+        cooldownSeconds: 12,
+        dailyLimit: 600,
+      };
+    } else if (preset === 'balanced') {
       updates = {
         ...updates,
         minDelaySeconds: 3,
@@ -146,6 +157,7 @@ export const UserTable: React.FC<UserTableProps> = ({
         enableBatchCooldown: true,
         batchSize: 20,
         cooldownSeconds: 25,
+        dailyLimit: 200,
       };
     } else if (preset === 'fast') {
       updates = {
@@ -156,6 +168,7 @@ export const UserTable: React.FC<UserTableProps> = ({
         enableBatchCooldown: true,
         batchSize: 25,
         cooldownSeconds: 15,
+        dailyLimit: 250,
       };
     } else if (preset === 'safe') {
       updates = {
@@ -166,6 +179,7 @@ export const UserTable: React.FC<UserTableProps> = ({
         enableBatchCooldown: true,
         batchSize: 15,
         cooldownSeconds: 45,
+        dailyLimit: 150,
       };
     }
     await handleUpdateSettings(updates);
@@ -823,7 +837,9 @@ export const UserTable: React.FC<UserTableProps> = ({
                 {ut.safety.title}
               </span>
               <span className="text-[11px] text-slate-400">
-                {settings.safetyPreset === 'safe'
+                {settings.safetyPreset === 'premium'
+                  ? ut.safety.presetPremium
+                  : settings.safetyPreset === 'safe'
                   ? ut.safety.presetSafe
                   : settings.safetyPreset === 'balanced'
                   ? ut.safety.presetBalanced
@@ -834,12 +850,13 @@ export const UserTable: React.FC<UserTableProps> = ({
             </div>
 
             {/* Hazır Güvenlik Profilleri */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
               {[
+                { id: 'premium' as const, title: '👑 X Premium', desc: '1.8-3.5s + 12s mola' },
                 { id: 'balanced' as const, title: '⚖️ Önerilen', desc: '3-7s + 25s mola' },
                 { id: 'fast' as const, title: '⚡ Hızlı', desc: '2-4s + 15s mola' },
                 { id: 'safe' as const, title: '🛡️ Ultra Güvenli', desc: '6-12s + 45s mola' },
-                { id: 'custom' as const, title: '⚙️ Özel', desc: 'Manuel süreler' },
+                { id: 'custom' as const, title: '⚙️ Özel', desc: 'Manuel' },
               ].map((p) => (
                 <button
                   key={p.id}
@@ -866,13 +883,14 @@ export const UserTable: React.FC<UserTableProps> = ({
                 <div className="flex items-center gap-1.5">
                   <input
                     type="number"
+                    step="0.1"
                     min="1"
                     max="600"
                     value={settings.minDelaySeconds}
                     onChange={(e) =>
                       handleUpdateSettings({
                         safetyPreset: 'custom',
-                        minDelaySeconds: Math.max(1, parseInt(e.target.value, 10) || 3),
+                        minDelaySeconds: Math.max(1, parseFloat(e.target.value) || 1.8),
                       })
                     }
                     className="w-16 bg-black/40 border border-white/20 rounded px-2 py-1 text-white font-bold text-xs"
@@ -880,13 +898,14 @@ export const UserTable: React.FC<UserTableProps> = ({
                   <span>-</span>
                   <input
                     type="number"
-                    min="2"
+                    step="0.1"
+                    min="1.5"
                     max="600"
                     value={settings.maxDelaySeconds}
                     onChange={(e) =>
                       handleUpdateSettings({
                         safetyPreset: 'custom',
-                        maxDelaySeconds: Math.max(2, parseInt(e.target.value, 10) || 7),
+                        maxDelaySeconds: Math.max(1.5, parseFloat(e.target.value) || 3.5),
                       })
                     }
                     className="w-16 bg-black/40 border border-white/20 rounded px-2 py-1 text-white font-bold text-xs"

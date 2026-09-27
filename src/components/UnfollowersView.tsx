@@ -142,7 +142,18 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
   // Güvenlik profili değiştirme
   const applySafetyPreset = async (preset: SafetyPreset) => {
     let updates: Partial<UnfollowersSettings> = { safetyPreset: preset };
-    if (preset === 'balanced') {
+    if (preset === 'premium') {
+      updates = {
+        ...updates,
+        minDelaySeconds: 1.8,
+        maxDelaySeconds: 3.5,
+        jitter: true,
+        enableBatchCooldown: true,
+        batchSize: 35,
+        cooldownSeconds: 12,
+        dailyLimit: 600,
+      };
+    } else if (preset === 'balanced') {
       updates = {
         ...updates,
         minDelaySeconds: 3,
@@ -151,6 +162,7 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
         enableBatchCooldown: true,
         batchSize: 20,
         cooldownSeconds: 25,
+        dailyLimit: 200,
       };
     } else if (preset === 'fast') {
       updates = {
@@ -161,6 +173,7 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
         enableBatchCooldown: true,
         batchSize: 25,
         cooldownSeconds: 15,
+        dailyLimit: 250,
       };
     } else if (preset === 'safe') {
       updates = {
@@ -171,6 +184,7 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
         enableBatchCooldown: true,
         batchSize: 15,
         cooldownSeconds: 45,
+        dailyLimit: 150,
       };
     }
     await handleUpdateSettings(updates);
@@ -690,7 +704,9 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
               {/* Aktif Güvenlik Profili Rozeti */}
               <span className="hidden sm:inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-400/30">
                 <Shield size={11} />
-                {settings.safetyPreset === 'safe'
+                {settings.safetyPreset === 'premium'
+                  ? `👑 Premium (${settings.minDelaySeconds}-${settings.maxDelaySeconds}s)`
+                  : settings.safetyPreset === 'safe'
                   ? `Anti-Ban (${settings.minDelaySeconds}-${settings.maxDelaySeconds}s)`
                   : settings.safetyPreset === 'balanced'
                   ? `Dengeli (${settings.minDelaySeconds}-${settings.maxDelaySeconds}s)`
@@ -746,8 +762,15 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
             {/* Güvenlik Profili Preset Kartları */}
             <div>
               <label className="block text-slate-300 font-semibold mb-2">{t.safety.presetLabel}</label>
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
                 {[
+                  {
+                    id: 'premium' as const,
+                    title: t.safety.presetPremium,
+                    desc: '1.8-3.5s ultra seri + 12s mola',
+                    badge: '👑 Premium',
+                    color: 'border-amber-400/60 bg-amber-500/15 text-amber-200',
+                  },
                   {
                     id: 'balanced' as const,
                     title: t.safety.presetBalanced,
@@ -760,7 +783,7 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
                     title: t.safety.presetFast,
                     desc: '2-4s hızlı + 15s mola',
                     badge: 'Seri',
-                    color: 'border-amber-500/40 bg-amber-500/10 text-amber-300',
+                    color: 'border-indigo-500/40 bg-indigo-500/10 text-indigo-300',
                   },
                   {
                     id: 'safe' as const,
@@ -812,13 +835,14 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
                     <span className="text-[10px] text-slate-400 block mb-0.5">{t.minIntervalLabel}</span>
                     <input
                       type="number"
+                      step="0.1"
                       min="1"
                       max="600"
                       value={settings.minDelaySeconds}
                       onChange={(e) => {
                         handleUpdateSettings({
                           safetyPreset: 'custom',
-                          minDelaySeconds: Math.max(1, parseInt(e.target.value, 10) || 3),
+                          minDelaySeconds: Math.max(1, parseFloat(e.target.value) || 1.8),
                         });
                       }}
                       className="w-full bg-black/40 border border-white/20 rounded-lg px-2.5 py-1 text-white text-sm font-semibold focus:outline-none focus:border-blue-400"
@@ -829,13 +853,14 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
                     <span className="text-[10px] text-slate-400 block mb-0.5">{t.maxIntervalLabel}</span>
                     <input
                       type="number"
-                      min="2"
+                      step="0.1"
+                      min="1.5"
                       max="600"
                       value={settings.maxDelaySeconds}
                       onChange={(e) => {
                         handleUpdateSettings({
                           safetyPreset: 'custom',
-                          maxDelaySeconds: Math.max(2, parseInt(e.target.value, 10) || 7),
+                          maxDelaySeconds: Math.max(1.5, parseFloat(e.target.value) || 3.5),
                         });
                       }}
                       className="w-full bg-black/40 border border-white/20 rounded-lg px-2.5 py-1 text-white text-sm font-semibold focus:outline-none focus:border-blue-400"
