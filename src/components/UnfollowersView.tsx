@@ -56,15 +56,15 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [whitelistIds, setWhitelistIds] = useState<Set<string>>(new Set());
   const [settings, setSettings] = useState<UnfollowersSettings>({
-    delaySeconds: 30,
-    minDelaySeconds: 20,
-    maxDelaySeconds: 45,
+    delaySeconds: 5,
+    minDelaySeconds: 3,
+    maxDelaySeconds: 7,
     jitter: true,
-    safetyPreset: 'safe',
+    safetyPreset: 'balanced',
     enableBatchCooldown: true,
-    batchSize: 15,
-    cooldownSeconds: 180,
-    dailyLimit: 150,
+    batchSize: 20,
+    cooldownSeconds: 25,
+    dailyLimit: 200,
     whitelist: [],
     dailyDate: '',
     dailyCount: 0,
@@ -142,33 +142,35 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
   // Güvenlik profili değiştirme
   const applySafetyPreset = async (preset: SafetyPreset) => {
     let updates: Partial<UnfollowersSettings> = { safetyPreset: preset };
-    if (preset === 'safe') {
+    if (preset === 'balanced') {
       updates = {
         ...updates,
-        minDelaySeconds: 25,
-        maxDelaySeconds: 50,
-        jitter: true,
-        enableBatchCooldown: true,
-        batchSize: 15,
-        cooldownSeconds: 180,
-      };
-    } else if (preset === 'balanced') {
-      updates = {
-        ...updates,
-        minDelaySeconds: 15,
-        maxDelaySeconds: 30,
+        minDelaySeconds: 3,
+        maxDelaySeconds: 7,
         jitter: true,
         enableBatchCooldown: true,
         batchSize: 20,
-        cooldownSeconds: 120,
+        cooldownSeconds: 25,
       };
     } else if (preset === 'fast') {
       updates = {
         ...updates,
-        minDelaySeconds: 8,
-        maxDelaySeconds: 15,
+        minDelaySeconds: 2,
+        maxDelaySeconds: 4,
         jitter: true,
-        enableBatchCooldown: false,
+        enableBatchCooldown: true,
+        batchSize: 25,
+        cooldownSeconds: 15,
+      };
+    } else if (preset === 'safe') {
+      updates = {
+        ...updates,
+        minDelaySeconds: 6,
+        maxDelaySeconds: 12,
+        jitter: true,
+        enableBatchCooldown: true,
+        batchSize: 15,
+        cooldownSeconds: 45,
       };
     }
     await handleUpdateSettings(updates);
@@ -365,11 +367,11 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
       return;
     }
 
-    if (settings.minDelaySeconds < 10) {
+    if (settings.minDelaySeconds < 1.5) {
       const ok = window.confirm(
         lang === 'tr'
-          ? `Minimum bekleme süresi ${settings.minDelaySeconds} saniye olarak ayarlanmış. X kısıtlama riskini önlemek için 20+ saniye önerilir. Yine de devam etmek istiyor musunuz?`
-          : `Min delay is set to ${settings.minDelaySeconds}s. 20+ seconds is recommended to prevent restriction risk. Continue anyway?`
+          ? `Minimum bekleme süresi ${settings.minDelaySeconds} saniye olarak ayarlanmış. X kısıtlama riskini önlemek için en az 2-3 saniye önerilir. Yine de devam etmek istiyor musunuz?`
+          : `Min delay is set to ${settings.minDelaySeconds}s. 2-3+ seconds is recommended to prevent restriction risk. Continue anyway?`
       );
       if (!ok) return;
     }
@@ -388,13 +390,13 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
       const currentSettings = await unfollowersService.getSettings();
       setSettings(currentSettings);
 
-      // Doğal Anti-Ban Hazırlık Molası (3 sn)
+      // Doğal Anti-Ban Hazırlık Molası (1 sn)
       setStatusText(
         lang === 'tr'
-          ? `🛡️ Anti-Ban koruması aktif (${currentSettings.minDelaySeconds}-${currentSettings.maxDelaySeconds}s). Güvenli oturum hazırlanıyor...`
-          : `🛡️ Anti-Ban active (${currentSettings.minDelaySeconds}-${currentSettings.maxDelaySeconds}s). Preparing safe session...`
+          ? `🛡️ Anti-Ban koruması aktif (${currentSettings.minDelaySeconds}-${currentSettings.maxDelaySeconds}s). Oturum başlatılıyor...`
+          : `🛡️ Anti-Ban active (${currentSettings.minDelaySeconds}-${currentSettings.maxDelaySeconds}s). Starting session...`
       );
-      const initEnd = Date.now() + 3000;
+      const initEnd = Date.now() + 1000;
       while (Date.now() < initEnd) {
         if (unfollowAbortRef.current) break;
         const remainingSec = Math.max(1, Math.ceil((initEnd - Date.now()) / 1000));
@@ -540,9 +542,9 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
     if (!window.confirm(confirmMsg)) return;
 
     try {
-      // Doğal insan ritmi / Anti-Ban mikro beklemesi (1.2 sn)
+      // Doğal insan ritmi / Anti-Ban mikro beklemesi (0.4 sn)
       setStatusText(lang === 'tr' ? `🛡️ @${user.username} güvenle takipten çıkarılıyor...` : `🛡️ Safely unfollowing @${user.username}...`);
-      await new Promise((r) => setTimeout(r, 1200));
+      await new Promise((r) => setTimeout(r, 400));
       await unfollowersService.unfollowUser(user);
       await unfollowersService.incrementDailyCount();
       setSettings((prev) => ({ ...prev, dailyCount: prev.dailyCount + 1 }));
@@ -747,25 +749,25 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
               <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
                 {[
                   {
-                    id: 'safe' as const,
-                    title: t.safety.presetSafe,
-                    desc: '25-50s rastgele + 3 dk mola',
-                    badge: 'Anti-Ban',
-                    color: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
-                  },
-                  {
                     id: 'balanced' as const,
                     title: t.safety.presetBalanced,
-                    desc: '15-30s rastgele + 2 dk mola',
-                    badge: 'Standart',
+                    desc: '3-7s insansı aralık + 25s mola',
+                    badge: 'Önerilen',
                     color: 'border-blue-500/40 bg-blue-500/10 text-blue-300',
                   },
                   {
                     id: 'fast' as const,
                     title: t.safety.presetFast,
-                    desc: '8-15s rastgele (molasız)',
-                    badge: 'Hızlı',
+                    desc: '2-4s hızlı + 15s mola',
+                    badge: 'Seri',
                     color: 'border-amber-500/40 bg-amber-500/10 text-amber-300',
+                  },
+                  {
+                    id: 'safe' as const,
+                    title: t.safety.presetSafe,
+                    desc: '6-12s rastgele + 45s mola',
+                    badge: 'Ultra Güvenli',
+                    color: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
                   },
                   {
                     id: 'custom' as const,
@@ -810,13 +812,13 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
                     <span className="text-[10px] text-slate-400 block mb-0.5">{t.minIntervalLabel}</span>
                     <input
                       type="number"
-                      min="3"
+                      min="1"
                       max="600"
                       value={settings.minDelaySeconds}
                       onChange={(e) => {
                         handleUpdateSettings({
                           safetyPreset: 'custom',
-                          minDelaySeconds: Math.max(3, parseInt(e.target.value, 10) || 5),
+                          minDelaySeconds: Math.max(1, parseInt(e.target.value, 10) || 3),
                         });
                       }}
                       className="w-full bg-black/40 border border-white/20 rounded-lg px-2.5 py-1 text-white text-sm font-semibold focus:outline-none focus:border-blue-400"
@@ -827,13 +829,13 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
                     <span className="text-[10px] text-slate-400 block mb-0.5">{t.maxIntervalLabel}</span>
                     <input
                       type="number"
-                      min="5"
+                      min="2"
                       max="600"
                       value={settings.maxDelaySeconds}
                       onChange={(e) => {
                         handleUpdateSettings({
                           safetyPreset: 'custom',
-                          maxDelaySeconds: Math.max(5, parseInt(e.target.value, 10) || 10),
+                          maxDelaySeconds: Math.max(2, parseInt(e.target.value, 10) || 7),
                         });
                       }}
                       className="w-full bg-black/40 border border-white/20 rounded-lg px-2.5 py-1 text-white text-sm font-semibold focus:outline-none focus:border-blue-400"
@@ -883,14 +885,14 @@ export const UnfollowersView: React.FC<UnfollowersViewProps> = ({ lang }) => {
                     <span className="text-[10px] text-slate-400 block mb-0.5">Mola (sn):</span>
                     <input
                       type="number"
-                      min="10"
+                      min="5"
                       max="600"
                       disabled={!settings.enableBatchCooldown}
                       value={settings.cooldownSeconds}
                       onChange={(e) => {
                         handleUpdateSettings({
                           safetyPreset: 'custom',
-                          cooldownSeconds: Math.max(10, parseInt(e.target.value, 10) || 180),
+                          cooldownSeconds: Math.max(5, parseInt(e.target.value, 10) || 25),
                         });
                       }}
                       className="w-full bg-black/40 border border-white/20 rounded-lg px-2.5 py-1 text-white text-sm font-semibold focus:outline-none focus:border-blue-400 disabled:opacity-40"

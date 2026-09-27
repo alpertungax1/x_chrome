@@ -88,15 +88,15 @@ export const UserTable: React.FC<UserTableProps> = ({
   // Anti-Ban & Güvenlik Ayarları State'i
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [settings, setSettings] = useState<UnfollowersSettings>({
-    delaySeconds: 30,
-    minDelaySeconds: 20,
-    maxDelaySeconds: 45,
+    delaySeconds: 5,
+    minDelaySeconds: 3,
+    maxDelaySeconds: 7,
     jitter: true,
-    safetyPreset: 'safe',
+    safetyPreset: 'balanced',
     enableBatchCooldown: true,
-    batchSize: 15,
-    cooldownSeconds: 180,
-    dailyLimit: 150,
+    batchSize: 20,
+    cooldownSeconds: 25,
+    dailyLimit: 200,
     whitelist: [],
     dailyDate: '',
     dailyCount: 0,
@@ -137,33 +137,35 @@ export const UserTable: React.FC<UserTableProps> = ({
 
   const applySafetyPreset = async (preset: SafetyPreset) => {
     let updates: Partial<UnfollowersSettings> = { safetyPreset: preset };
-    if (preset === 'safe') {
+    if (preset === 'balanced') {
       updates = {
         ...updates,
-        minDelaySeconds: 25,
-        maxDelaySeconds: 50,
-        jitter: true,
-        enableBatchCooldown: true,
-        batchSize: 15,
-        cooldownSeconds: 180,
-      };
-    } else if (preset === 'balanced') {
-      updates = {
-        ...updates,
-        minDelaySeconds: 15,
-        maxDelaySeconds: 30,
+        minDelaySeconds: 3,
+        maxDelaySeconds: 7,
         jitter: true,
         enableBatchCooldown: true,
         batchSize: 20,
-        cooldownSeconds: 120,
+        cooldownSeconds: 25,
       };
     } else if (preset === 'fast') {
       updates = {
         ...updates,
-        minDelaySeconds: 8,
-        maxDelaySeconds: 15,
+        minDelaySeconds: 2,
+        maxDelaySeconds: 4,
         jitter: true,
-        enableBatchCooldown: false,
+        enableBatchCooldown: true,
+        batchSize: 25,
+        cooldownSeconds: 15,
+      };
+    } else if (preset === 'safe') {
+      updates = {
+        ...updates,
+        minDelaySeconds: 6,
+        maxDelaySeconds: 12,
+        jitter: true,
+        enableBatchCooldown: true,
+        batchSize: 15,
+        cooldownSeconds: 45,
       };
     }
     await handleUpdateSettings(updates);
@@ -603,13 +605,13 @@ export const UserTable: React.FC<UserTableProps> = ({
       const currentSettings = await unfollowersService.getSettings();
       setSettings(currentSettings);
 
-      // Doğal Anti-Ban Hazırlık Molası (Kullanıcının ve sistemin güvenli başlaması için 3 sn)
+      // Doğal Anti-Ban Hazırlık Molası (1 sn)
       setBulkStatusText(
         lang === 'tr'
-          ? `🛡️ Anti-Ban koruması aktif (${currentSettings.minDelaySeconds}-${currentSettings.maxDelaySeconds}s). Güvenli oturum hazırlanıyor...`
-          : `🛡️ Anti-Ban active (${currentSettings.minDelaySeconds}-${currentSettings.maxDelaySeconds}s). Preparing safe session...`
+          ? `🛡️ Anti-Ban koruması aktif (${currentSettings.minDelaySeconds}-${currentSettings.maxDelaySeconds}s). Oturum başlatılıyor...`
+          : `🛡️ Anti-Ban active (${currentSettings.minDelaySeconds}-${currentSettings.maxDelaySeconds}s). Starting session...`
       );
-      const initEnd = Date.now() + 3000;
+      const initEnd = Date.now() + 1000;
       while (Date.now() < initEnd) {
         if (bulkAbortRef.current) break;
         const rem = Math.max(1, Math.ceil((initEnd - Date.now()) / 1000));
@@ -834,9 +836,9 @@ export const UserTable: React.FC<UserTableProps> = ({
             {/* Hazır Güvenlik Profilleri */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {[
-                { id: 'safe' as const, title: '🛡️ Ultra Güvenli', desc: '25-50s + 3 dk mola' },
-                { id: 'balanced' as const, title: '⚖️ Standart', desc: '15-30s + 2 dk mola' },
-                { id: 'fast' as const, title: '⚡ Hızlı', desc: '8-15s (molasız)' },
+                { id: 'balanced' as const, title: '⚖️ Önerilen', desc: '3-7s + 25s mola' },
+                { id: 'fast' as const, title: '⚡ Hızlı', desc: '2-4s + 15s mola' },
+                { id: 'safe' as const, title: '🛡️ Ultra Güvenli', desc: '6-12s + 45s mola' },
                 { id: 'custom' as const, title: '⚙️ Özel', desc: 'Manuel süreler' },
               ].map((p) => (
                 <button
@@ -864,13 +866,13 @@ export const UserTable: React.FC<UserTableProps> = ({
                 <div className="flex items-center gap-1.5">
                   <input
                     type="number"
-                    min="3"
+                    min="1"
                     max="600"
                     value={settings.minDelaySeconds}
                     onChange={(e) =>
                       handleUpdateSettings({
                         safetyPreset: 'custom',
-                        minDelaySeconds: Math.max(3, parseInt(e.target.value, 10) || 5),
+                        minDelaySeconds: Math.max(1, parseInt(e.target.value, 10) || 3),
                       })
                     }
                     className="w-16 bg-black/40 border border-white/20 rounded px-2 py-1 text-white font-bold text-xs"
@@ -878,13 +880,13 @@ export const UserTable: React.FC<UserTableProps> = ({
                   <span>-</span>
                   <input
                     type="number"
-                    min="5"
+                    min="2"
                     max="600"
                     value={settings.maxDelaySeconds}
                     onChange={(e) =>
                       handleUpdateSettings({
                         safetyPreset: 'custom',
-                        maxDelaySeconds: Math.max(5, parseInt(e.target.value, 10) || 10),
+                        maxDelaySeconds: Math.max(2, parseInt(e.target.value, 10) || 7),
                       })
                     }
                     className="w-16 bg-black/40 border border-white/20 rounded px-2 py-1 text-white font-bold text-xs"
@@ -918,7 +920,7 @@ export const UserTable: React.FC<UserTableProps> = ({
                     onChange={(e) =>
                       handleUpdateSettings({
                         safetyPreset: 'custom',
-                        batchSize: Math.max(5, parseInt(e.target.value, 10) || 15),
+                        batchSize: Math.max(5, parseInt(e.target.value, 10) || 20),
                       })
                     }
                     className="w-12 bg-black/40 border border-white/20 rounded px-1.5 py-1 text-white font-bold text-xs disabled:opacity-30"
@@ -926,14 +928,14 @@ export const UserTable: React.FC<UserTableProps> = ({
                   <span className="text-[10px] text-slate-400">kişide,</span>
                   <input
                     type="number"
-                    min="10"
+                    min="5"
                     max="600"
                     disabled={!settings.enableBatchCooldown}
                     value={settings.cooldownSeconds}
                     onChange={(e) =>
                       handleUpdateSettings({
                         safetyPreset: 'custom',
-                        cooldownSeconds: Math.max(10, parseInt(e.target.value, 10) || 180),
+                        cooldownSeconds: Math.max(5, parseInt(e.target.value, 10) || 25),
                       })
                     }
                     className="w-14 bg-black/40 border border-white/20 rounded px-1.5 py-1 text-white font-bold text-xs disabled:opacity-30"
