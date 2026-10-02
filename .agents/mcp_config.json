@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "wrongstack-sage": {
+      "command": "C:\\Users\\ozugu\\.wrongstack\\bin\\wstack.exe",
+      "args": [
+        "sage",
+        "mcp",
+        "--origin",
+        "antigravity"
+      ]
+    }
+  }
+}

@@ -38,3 +38,9 @@ coverage/
 # Grok / agent local
 .grok/
 tasks/
+.temp_files/
+
+.wrongstack/
+!/.wrongstack/
+/.wrongstack/*
+!/.wrongstack/project.json
