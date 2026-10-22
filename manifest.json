@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "X Relationship Manager",
   "version": "1.0.0",
-  "description": "X (Twitter) relationship manager extension",
+  "description": "Advanced X (Twitter) Relationship & Unfollower Manager with Anti-Ban Safety Presets",
   "action": {
     "default_popup": "index.html"
   },

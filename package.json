@@ -1,5 +1,6 @@
 {
   "name": "x-relationship-manager",
+  "description": "Advanced X (Twitter) Relationship & Unfollower Manager Chrome Extension",
   "private": true,
   "version": "1.0.0",
   "type": "module",
